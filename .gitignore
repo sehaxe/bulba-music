@@ -1,0 +1,24 @@
+# rust
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# android
+.gradle/
+local.properties
+*.apk
+*.aab
+.cxx/
+**/build/
+
+# runtime data
+/data/
+*.db
+*.db-wal
+*.db-shm
+incoming/
+
+# editors / os
+.idea/
+*.swp
+.DS_Store
