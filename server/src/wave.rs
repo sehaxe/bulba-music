@@ -568,6 +568,48 @@ mod tests {
     }
 
     #[test]
+    fn a_skipped_track_loses_its_place() {
+        let (_d, conn) = setup();
+        let user = crate::auth::local_user(&conn).unwrap();
+        // The listener plays track 1 and 2 (cluster A) and skips track 3.
+        for (track, event) in [(1i64, 0i64), (2, 0)] {
+            conn.execute(
+                "INSERT INTO play_event(ts,user_id,track_id,session_id,event,
+                    position_ms,position_ratio,source,client_id,device,offline,quality)
+                 VALUES(0,?1,?2,1,?3,0,0,0,'test','test',0,0)",
+                rusqlite::params![user, track, event],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO play_event(ts,user_id,track_id,session_id,event,
+                position_ms,position_ratio,source,client_id,device,offline,quality)
+             VALUES(0,?1,3,1,2,0,0.1,0,'test','test',0,0)",
+            rusqlite::params![user],
+        )
+        .unwrap();
+
+        let req = Request {
+            user,
+            seed: Some(1),
+            exclude: &[1],
+            limit: 5,
+            novelty: 0.0,
+            seed_title: None,
+        };
+        let mut artists = HashMap::new();
+        for id in 1..=5 {
+            artists.insert(id as i64, if id <= 3 { 1 } else { 2 });
+        }
+        let got: Vec<i64> = pick(&conn, &req, &artists, &HashMap::new(), &HashMap::new())
+            .unwrap()
+            .into_iter()
+            .map(|i| i.track_id)
+            .collect();
+        assert!(!got.contains(&3), "a skipped track came back: {got:?}");
+    }
+
+    #[test]
     fn an_empty_library_returns_nothing_instead_of_failing() {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::new(dir.path().join("e.db"));
