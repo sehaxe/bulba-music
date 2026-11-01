@@ -15,6 +15,7 @@ import 'screens/home.dart';
 import 'screens/library.dart';
 import 'screens/player_screen.dart';
 import 'screens/playlists.dart';
+import 'screens/wave.dart';
 import 'screens/liked.dart';
 import 'screens/album.dart';
 import 'screens/artist.dart';
@@ -232,18 +233,22 @@ class _ShellState extends State<Shell> {
     }
   }
 
+  int? _waveSeed;
+  String? _waveSeedTitle;
+
+  void _startFromTrack(Track t) {
+    setState(() {
+      _waveSeed = t.id;
+      _waveSeedTitle = t.title;
+      _tab = kWaveTab;
+      _stack.clear();
+    });
+  }
+
+  /// Everything that used to say «радио от этого трека» now seeds the wave:
+  /// one endless stream that keeps adapting, instead of one frozen list.
   Future<void> _startRadio(Track seed) async {
-    try {
-      final similar = await widget.api.similar(seed.id, n: 40);
-      if (similar.isEmpty) return;
-      await widget.player.play(similar.first, queue: similar);
-      if (mounted) {
-        setState(() => _tab = 2);
-        if (MediaQuery.sizeOf(context).width < 900) _openPlayer();
-      }
-    } catch (e) {
-      debugPrint('radio failed: $e');
-    }
+    _startFromTrack(seed);
   }
 
   void _openPlayer() {
@@ -556,7 +561,16 @@ class _ShellState extends State<Shell> {
           onOpenAlbum: _openAlbum,
           onOpenLibrary: () => _select(2),
         );
-      case 1:
+      case kWaveTab:
+        return WaveScreen(
+          api: widget.api,
+          player: widget.player,
+          likes: widget.likes,
+          accent: _accent,
+          seed: _waveSeed,
+          seedTitle: _waveSeedTitle,
+        );
+      case kSearchTab:
         return SearchScreen(
           api: widget.api,
           player: widget.player,
@@ -564,7 +578,7 @@ class _ShellState extends State<Shell> {
           onOpen: _openCollection,
           likes: widget.likes,
         );
-      case 2:
+      case kLibraryTab:
         return LibraryScreen(
           tracks: _tracks,
           api: widget.api,
@@ -574,7 +588,7 @@ class _ShellState extends State<Shell> {
           onAlbum: _openAlbum,
           onRadio: _startRadio,
         );
-      case 3:
+      case 4:
         return LikedScreen(
           api: widget.api,
           player: widget.player,

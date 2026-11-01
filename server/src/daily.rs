@@ -62,11 +62,11 @@ fn seeded(day: &str, salt: u64) -> f32 {
     (h.finish() % 1000) as f32 / 1000.0
 }
 
-pub fn ensure(conn: &Connection, model: &str) -> Result<()> {
+pub fn ensure(conn: &Connection, model: &str, user: i64) -> Result<()> {
     let day = day_key();
     let existing: i64 = conn.query_row(
-        "SELECT count(*) FROM daily_mix WHERE day=?1",
-        [&day],
+        "SELECT count(*) FROM daily_mix WHERE day=?1 AND user_id=?2",
+        rusqlite::params![day, user],
         |r| r.get(0),
     )?;
     if existing > 0 {
@@ -74,7 +74,7 @@ pub fn ensure(conn: &Connection, model: &str) -> Result<()> {
     }
 
     let feats = load_features(conn, model)?;
-    let ctx = load_context(conn)?;
+    let ctx = load_context(conn, user)?;
     let mixes = build(&feats, &ctx, &day);
 
     for mix in mixes {
@@ -91,14 +91,16 @@ pub fn ensure(conn: &Connection, model: &str) -> Result<()> {
 
 /// Loads the day's mixes; the id is derived from the title so the client can
 /// keep requesting "the calm one" across restarts.
-pub fn load(conn: &Connection) -> Result<Vec<DailyMix>> {
+pub fn load(conn: &Connection, user: i64) -> Result<Vec<DailyMix>> {
     let day = day_key();
     let mut stmt = conn.prepare(
         "SELECT slot, title, note, track_id FROM daily_mix
-         WHERE day=?1 ORDER BY slot, position",
+         WHERE day=?1 AND user_id=?2 ORDER BY slot, position",
     )?;
     let rows: Vec<(i64, String, String, i64)> = stmt
-        .query_map([&day], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .query_map(rusqlite::params![day, user], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?
         .filter_map(|r| r.ok())
         .collect();
 
@@ -140,21 +142,22 @@ fn load_features(conn: &Connection, model: &str) -> Result<Vec<Feat>> {
         .collect())
 }
 
-fn load_context(conn: &Connection) -> Result<Context> {
+fn load_context(conn: &Connection, user: i64) -> Result<Context> {
     let played: HashSet<i64> = {
-        let mut stmt = conn.prepare("SELECT DISTINCT track_id FROM play_event")?;
-        stmt.query_map([], |r| r.get(0))?
+        let mut stmt =
+            conn.prepare("SELECT DISTINCT track_id FROM play_event WHERE user_id=?1")?;
+        stmt.query_map([user], |r| r.get(0))?
             .filter_map(|r| r.ok())
             .collect()
     };
     let liked: HashSet<i64> = {
-        let mut stmt = conn.prepare("SELECT track_id FROM track_like")?;
-        stmt.query_map([], |r| r.get(0))?
+        let mut stmt = conn.prepare("SELECT track_id FROM track_like WHERE user_id=?1")?;
+        stmt.query_map([user], |r| r.get(0))?
             .filter_map(|r| r.ok())
             .collect()
     };
     Ok(Context {
-        taste: taste_vector(conn)?,
+        taste: taste_vector(conn, user)?,
         played,
         liked,
     })
@@ -162,7 +165,7 @@ fn load_context(conn: &Connection) -> Result<Context> {
 
 /// One weighted centroid of everything the listener rewarded, minus what they
 /// skipped. Completion counts, a like counts more, a skip subtracts.
-pub fn taste_vector(conn: &Connection) -> Result<Option<Vec<f32>>> {
+pub fn taste_vector(conn: &Connection, user: i64) -> Result<Option<Vec<f32>>> {
     let mut stmt = conn.prepare(
         "SELECT e.vec,
                 sum(CASE pe.event
@@ -171,18 +174,23 @@ pub fn taste_vector(conn: &Connection) -> Result<Option<Vec<f32>>> {
                       WHEN 1 THEN 0.25 * pe.position_ratio
                       WHEN 2 THEN -0.45
                       ELSE 0.0 END)
-                + 2.0 * (SELECT count(*) FROM track_like l WHERE l.track_id = e.track_id)
+                + 2.0 * (SELECT count(*) FROM track_like l
+                  WHERE l.track_id = e.track_id AND l.user_id = ?1)
                 + min(1.5, 0.5 * (SELECT count(*) FROM play_event r
                                    WHERE r.track_id = e.track_id AND r.event = 4))
                 AS weight
          FROM play_event pe
-         JOIN embed e ON e.track_id = pe.track_id AND e.model = ?1
+         JOIN embed e ON e.track_id = pe.track_id AND e.model = ?2
+         WHERE pe.user_id = ?1
          GROUP BY pe.track_id",
     )?;
     let rows: Vec<(Vec<u8>, f64)> = stmt
-        .query_map([crate::features::MODEL], |r| {
-            Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, f64>(1)?))
-        })?
+        .query_map(
+            rusqlite::params![user, crate::features::MODEL],
+            |r| {
+                Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, f64>(1)?))
+            },
+        )?
         .filter_map(|r| r.ok())
         .collect();
     if rows.is_empty() {

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../design/components.dart';
 import '../design/tokens.dart';
+import '../design/badges.dart';
 import '../screens/playlists.dart';
 import '../player/controller.dart';
 import '../player/likes.dart';
@@ -227,6 +228,12 @@ void _showDetails(BuildContext context, Track t, Api api) {
               if (t.trackNo != null)
                 _DetailRow(label: 'трек', value: '${t.trackNo}', p: p),
               _DetailRow(label: 'длительность', value: mmss(t.duration), p: p),
+              if (tagsOf(t).isNotEmpty)
+                _DetailRow(
+                  label: 'теги',
+                  value: tagsOf(t).map((e) => e.label).join(' · '),
+                  p: p,
+                ),
               _DetailRow(
                 label: 'формат',
                 value: [

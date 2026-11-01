@@ -239,6 +239,14 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Drops everything queued but keeps the current track playing.
+  void clearQueue() {
+    final t = current;
+    _queue = t == null ? const [] : [t];
+    _index = t == null ? -1 : 0;
+    notifyListeners();
+  }
+
   void addToQueue(Track track) {
     _queue = [..._queue, track];
     notifyListeners();

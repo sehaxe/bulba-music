@@ -1,6 +1,7 @@
 use crate::db::{default_user, Db};
 use crate::range::parse_range;
 use crate::scan;
+use std::collections::HashMap;
 use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
@@ -34,6 +35,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/recs/similar/{id}", get(similar))
         .route("/api/recs/home", get(home_mixes))
         .route("/api/recs/daily", get(daily_mixes))
+        .route("/api/recs/wave", get(wave))
         .route("/api/likes", get(list_likes))
         .route("/api/likes/ids", get(like_ids))
         .route("/api/likes/{id}", post(add_like).delete(remove_like))
@@ -133,7 +135,7 @@ impl From<std::io::Error> for ApiError {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Track {
     pub id: i64,
     pub title: String,
@@ -724,6 +726,127 @@ async fn unlike_playlist(
     Ok(Json(json!({ "ok": true })))
 }
 
+#[derive(Debug, Deserialize)]
+struct WaveQuery {
+    /// Start from this track instead of from the taste alone.
+    seed: Option<i64>,
+    /// Comma-separated ids to leave out (the queue and what just played).
+    exclude: Option<String>,
+    limit: Option<usize>,
+    /// 0 keeps to what is known, 1 goes hunting for the unknown.
+    novelty: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+struct WaveTrack {
+    #[serde(flatten)]
+    track: Track,
+    reason: String,
+    score: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct WaveReply {
+    tracks: Vec<WaveTrack>,
+    seed: Option<i64>,
+    /// False on a fresh account: the wave is guessing, not knowing.
+    taste_ready: bool,
+}
+
+async fn wave(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<WaveQuery>,
+) -> Result<Json<WaveReply>, ApiError> {
+    let db = st.db.clone();
+    let exclude: Vec<i64> = q
+        .exclude
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    let limit = q.limit.unwrap_or(12).clamp(1, 50);
+    let novelty = q.novelty.unwrap_or(0.35).clamp(0.0, 1.0);
+
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<WaveReply> {
+        let conn = db.open()?;
+        let me = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
+
+        // artist id and name per track, once, for the diversity rule and the
+        // "you listen to X a lot" sentence.
+        let mut artist_of: HashMap<i64, i64> = HashMap::new();
+        let mut name_of_artist: HashMap<i64, String> = HashMap::new();
+        let mut title_of: HashMap<i64, String> = HashMap::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT t.id, ar.id, ar.name FROM track t
+                 JOIN album al ON al.id = t.album_id
+                 JOIN artist ar ON ar.id = al.artist_id",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })?;
+            for row in rows.flatten() {
+                artist_of.insert(row.0, row.1);
+                name_of_artist.entry(row.1).or_insert(row.2);
+                title_of.insert(row.0, row.3);
+            }
+        }
+
+        let played: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM play_event WHERE user_id=?1 AND event IN (0,3)",
+                [me],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+
+        let items = crate::wave::pick(
+            &conn,
+            &crate::wave::Request {
+                user: me,
+                seed: q.seed,
+                exclude: &exclude,
+                limit,
+                novelty,
+            },
+            &artist_of,
+            &name_of_artist,
+            &title_of,
+        )?;
+
+        let ids: Vec<i64> = items.iter().map(|i| i.track_id).collect();
+        let tracks = tracks_by_ids(&conn, &ids)?;
+        let by_id: HashMap<i64, Track> =
+            tracks.into_iter().map(|t| (t.id, t)).collect();
+        let mut out = Vec::new();
+        for item in items {
+            if let Some(track) = by_id.get(&item.track_id) {
+                out.push(WaveTrack {
+                    track: (*track).clone(),
+                    reason: item.reason,
+                    score: item.score,
+                });
+            }
+        }
+        Ok(WaveReply {
+            tracks: out,
+            seed: q.seed,
+            taste_ready: played >= 5,
+        })
+    })
+    .await??;
+    Ok(Json(out))
+}
+
 async fn artist_html(
     State(st): State<AppState>,
     Path(id): Path<i64>,
@@ -838,13 +961,17 @@ struct StatsQuery {
 
 async fn stats(
     State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
     Query(q): Query<StatsQuery>,
 ) -> Result<Json<crate::stats::Stats>, ApiError> {
     let period = q.period.unwrap_or_else(|| "all".into());
     let db = st.db.clone();
     let out = tokio::task::spawn_blocking(move || -> anyhow::Result<crate::stats::Stats> {
         let conn = db.open()?;
-        crate::stats::collect(&conn, &period, q.year, q.month)
+        let me = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
+        crate::stats::collect(&conn, me, &period, q.year, q.month)
     })
     .await??;
     Ok(Json(out))
@@ -1047,6 +1174,7 @@ async fn build_features(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let limit = q.limit.unwrap_or(200).clamp(1, 5000);
     let db = st.db.clone();
+    let st_db_path = st.db.path().to_path_buf();
     let stats = tokio::task::spawn_blocking(move || -> anyhow::Result<(usize, i64)> {
         let conn = db.open()?;
         let rows: Vec<(i64, String)> = {
@@ -1067,36 +1195,72 @@ async fn build_features(
             .filter_map(|r| r.ok())
             .collect()
         };
-        let mut done = 0usize;
-        for (id, path) in &rows {
-            match crate::features::extract(path) {
-                Ok(fp) => {
-                    conn.execute(
-                        "INSERT OR REPLACE INTO embed(model, track_id, dim, vec)
-                         VALUES(?1, ?2, ?3, ?4)",
-                        rusqlite::params![
-                            crate::features::MODEL,
-                            id,
-                            crate::features::DIM as i64,
-                            crate::features::to_blob(&fp.vec)
-                        ],
-                    )?;
-                    conn.execute(
-                        "UPDATE track SET tempo_bpm=?1, brightness=?2, energy=?3, mode=?4
-                         WHERE id=?5",
-                        rusqlite::params![fp.tempo_bpm, fp.brightness, fp.energy, fp.mode, id],
-                    )?;
-                    done += 1;
-                }
-                Err(e) => tracing::warn!("features failed for {path}: {e}"),
+        // Decoding dominates, and this box has cores to spare: six workers
+        // turn an 80-minute library pass into about fifteen.
+        let workers = 6usize;
+        let chunk = (rows.len() + workers - 1) / workers.max(1);
+        let db_path = st_db_path.clone();
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let errors = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        std::thread::scope(|scope| {
+            for part in rows.chunks(chunk.max(1)) {
+                let db_path = db_path.clone();
+                let done = done.clone();
+                let errors = errors.clone();
+                scope.spawn(move || {
+                    let Ok(conn) = rusqlite::Connection::open(&db_path) else {
+                        return;
+                    };
+                    for (id, path) in part {
+                        match crate::features::extract(path) {
+                            Ok(fp) => {
+                                let _ = conn.execute(
+                                    "INSERT OR REPLACE INTO embed(model, track_id, dim, vec)
+                                     VALUES(?1, ?2, ?3, ?4)",
+                                    rusqlite::params![
+                                        crate::features::MODEL,
+                                        id,
+                                        crate::features::DIM as i64,
+                                        crate::features::to_blob(&fp.vec)
+                                    ],
+                                );
+                                let _ = conn.execute(
+                                    "INSERT OR REPLACE INTO track_features
+                                       (track_id, tempo_bpm, brightness, energy, mode)
+                                     VALUES(?1, ?2, ?3, ?4, ?5)",
+                                    rusqlite::params![
+                                        id,
+                                        fp.tempo_bpm as f64,
+                                        fp.brightness as f64,
+                                        fp.energy as f64,
+                                        fp.mode as f64
+                                    ],
+                                );
+                                done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                            Err(e) => {
+                                if let Ok(mut list) = errors.lock() {
+                                    list.push(format!("{path}: {e}"));
+                                }
+                            }
+                        }
+                    }
+                });
             }
+        });
+        let done = done.load(std::sync::atomic::Ordering::Relaxed);
+        let errors = errors.lock().map(|e| e.clone()).unwrap_or_default();
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM track t WHERE NOT EXISTS (
+                   SELECT 1 FROM embed e WHERE e.track_id = t.id AND e.model = ?1)",
+                [crate::features::MODEL],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if !errors.is_empty() {
+            tracing::warn!("features: {} files failed, first: {}", errors.len(), errors[0]);
         }
-        let remaining: i64 = conn.query_row(
-            "SELECT count(*) FROM track t WHERE NOT EXISTS (
-                 SELECT 1 FROM embed e WHERE e.track_id = t.id AND e.model = ?1)",
-            [crate::features::MODEL],
-            |r| r.get(0),
-        )?;
         Ok((done, remaining))
     })
     .await??;
@@ -1168,10 +1332,16 @@ fn tracks_by_ids(conn: &rusqlite::Connection, ids: &[i64]) -> anyhow::Result<Vec
 /// The "for you" page: mixes that can be built from what the library already
 /// knows, before any taste model exists. Empty mixes are dropped, so a fresh
 /// library shows only what is honest.
-async fn home_mixes(State(st): State<AppState>) -> Result<Json<Vec<Mix>>, ApiError> {
+async fn home_mixes(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<Vec<Mix>>, ApiError> {
     let db = st.db.clone();
     let mixes = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Mix>> {
         let conn = db.open()?;
+        let me = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
         let mut out: Vec<Mix> = Vec::new();
         let cols = TRACK_COLUMNS
             .split(',')
@@ -1300,12 +1470,18 @@ async fn home_mixes(State(st): State<AppState>) -> Result<Json<Vec<Mix>>, ApiErr
 }
 
 /// Four numbered playlists, stable for the day.
-async fn daily_mixes(State(st): State<AppState>) -> Result<Json<Vec<Mix>>, ApiError> {
+async fn daily_mixes(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<Vec<Mix>>, ApiError> {
     let db = st.db.clone();
     let mixes = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Mix>> {
         let conn = db.open()?;
-        crate::daily::ensure(&conn, crate::features::MODEL)?;
-        let rows = crate::daily::load(&conn)?;
+        let me = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
+        crate::daily::ensure(&conn, crate::features::MODEL, me)?;
+        let rows = crate::daily::load(&conn, me)?;
         let mut out = Vec::with_capacity(rows.len());
         for m in rows {
             let tracks = tracks_by_ids(&conn, &m.ids)?;

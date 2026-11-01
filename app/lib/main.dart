@@ -128,6 +128,23 @@ class _BulbaAppState extends State<BulbaApp> {
       error: C.danger,
       onError: p.canvas,
     ),
+    // Everything in this app is rounded; Material's defaults are not, and a
+    // square grey flash on a rounded row is exactly the thing that looked
+    // broken on a phone.
+    listTileTheme: ListTileThemeData(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      selectedTileColor: Colors.transparent,
+    ),
+    dialogTheme: DialogThemeData(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+    ),
+    popupMenuTheme: PopupMenuThemeData(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    ),
+    snackBarTheme: SnackBarThemeData(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      behavior: SnackBarBehavior.floating,
+    ),
     textSelectionTheme: TextSelectionThemeData(
       cursorColor: C.signal,
       selectionColor: C.signal.withValues(alpha: 0.2),

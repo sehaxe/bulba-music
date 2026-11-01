@@ -12,4 +12,5 @@ pub mod playlists;
 pub mod scan;
 pub mod search;
 pub mod stats;
+pub mod wave;
 pub mod words;

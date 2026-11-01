@@ -210,9 +210,41 @@ class _CopyLink extends StatefulWidget {
 class _CopyLinkState extends State<_CopyLink> {
   bool _copied = false;
 
+  Future<void> _copy() async {
+    await Clipboard.setData(
+      ClipboardData(text: '${widget.base}${widget.path}'),
+    );
+    if (!mounted) return;
+    setState(() => _copied = true);
+    await Future<void>.delayed(const Duration(seconds: 2));
+    if (mounted) setState(() => _copied = false);
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final narrow = MediaQuery.sizeOf(context).width < 560;
+    if (narrow) {
+      return GestureDetector(
+        onTap: _copy,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: Container(
+            padding: const EdgeInsets.all(9),
+            decoration: BoxDecoration(
+              color: p.soft,
+              border: Border.all(color: p.hairline),
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: Icon(
+              _copied ? Icons.check_rounded : Icons.link_rounded,
+              size: 15,
+              color: _copied ? C.signal : p.mute,
+            ),
+          ),
+        ),
+      );
+    }
     return GestureDetector(
       onTap: () async {
         await Clipboard.setData(

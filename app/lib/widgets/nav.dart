@@ -13,10 +13,14 @@ class NavItemData {
 
 /// Settings is last on purpose: the shell keeps it reachable even when the
 /// server does not answer.
-const kSettingsTab = 4;
+const kSettingsTab = 5;
+const kWaveTab = 1;
+const kSearchTab = 2;
+const kLibraryTab = 3;
 
 const kNavItems = <NavItemData>[
   NavItemData(Icons.home_rounded, 'home'),
+  NavItemData(Icons.waves_rounded, 'волна'),
   NavItemData(Icons.search_rounded, 'search'),
   NavItemData(Icons.grid_view_rounded, 'library'),
   NavItemData(Icons.favorite_rounded, 'liked'),

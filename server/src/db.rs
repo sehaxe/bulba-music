@@ -66,6 +66,12 @@ impl Db {
             "CREATE INDEX IF NOT EXISTS playlist_public ON playlist(is_public)",
             [],
         );
+        // Daily mixes are per listener: a second device starts with its own
+        // empty history and must not inherit the first one's picks.
+        let _ = conn.execute(
+            "ALTER TABLE daily_mix ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1",
+            [],
+        );
 
         // Older databases described a user by a telegram login. The account is
         // now a phrase, so the column goes away; ids are preserved because every

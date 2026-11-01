@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../design/components.dart';
 import '../design/tokens.dart';
+import '../design/badges.dart';
 
 class TrackRow extends StatefulWidget {
   const TrackRow({
@@ -65,11 +66,15 @@ class _TrackRowState extends State<TrackRow> {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 90),
           curve: Curves.easeOut,
-          color: widget.playing
-              ? p.card
-              : _hover
-              ? p.soft
-              : Colors.transparent,
+          margin: const EdgeInsets.symmetric(horizontal: S.xs),
+          decoration: BoxDecoration(
+            color: widget.playing
+                ? p.card
+                : _hover
+                ? p.soft
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
           padding: EdgeInsets.symmetric(
             horizontal: MediaQuery.sizeOf(context).width < 520 ? S.md : S.xl,
             vertical: S.sm,
@@ -111,13 +116,28 @@ class _TrackRowState extends State<TrackRow> {
                             widget.playing ? AccentScope.of(context) : p.ink,
                           ),
                         ),
-                        Text(
-                          widget.showCover
-                              ? t.artist
-                              : '${t.artist} · ${t.album}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: T.caption(p.mute),
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                widget.showCover
+                                    ? t.artist
+                                    : '${t.artist} · ${t.album}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: T.caption(p.mute),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: TagStrip(
+                                track: t,
+                                max: narrow ? 2 : 4,
+                                dense: true,
+                                color: p.ash,
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),

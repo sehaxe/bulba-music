@@ -950,6 +950,64 @@ class Playlist {
   );
 }
 
+/// One suggestion from the wave, with the sentence that explains it.
+class WaveTrack {
+  const WaveTrack({
+    required this.track,
+    required this.reason,
+    required this.score,
+  });
+  final Track track;
+  final String reason;
+  final double score;
+
+  factory WaveTrack.fromJson(Map<String, dynamic> j) => WaveTrack(
+    track: Track.fromJson(j),
+    reason: (j['reason'] ?? '') as String,
+    score: ((j['score'] ?? 0) as num).toDouble(),
+  );
+}
+
+class WaveReply {
+  const WaveReply({
+    required this.tracks,
+    required this.seed,
+    required this.tasteReady,
+  });
+  final List<WaveTrack> tracks;
+  final int? seed;
+  final bool tasteReady;
+
+  factory WaveReply.fromJson(Map<String, dynamic> j) => WaveReply(
+    tracks: (j['tracks'] as List<dynamic>)
+        .map((e) => WaveTrack.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    seed: j['seed'] as int?,
+    tasteReady: (j['taste_ready'] ?? false) as bool,
+  );
+}
+
+extension WaveApi on Api {
+  Future<WaveReply> wave({
+    int? seed,
+    double novelty = 0.35,
+    int limit = 12,
+    Set<int> exclude = const {},
+  }) async {
+    final params = <String, String>{
+      'novelty': novelty.toStringAsFixed(2),
+      'limit': '$limit',
+      if (seed != null) 'seed': '$seed',
+      if (exclude.isNotEmpty) 'exclude': exclude.join(','),
+    };
+    final uri = Uri.parse('$base/api/recs/wave')
+        .replace(queryParameters: params);
+    final r = await _http.get(uri).timeout(const Duration(seconds: 20));
+    if (r.statusCode != 200) throw ApiException('wave → ${r.statusCode}');
+    return WaveReply.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+}
+
 extension PlaylistApi on Api {
   Future<List<Playlist>> playlists() async {
     final r = await _http

@@ -129,6 +129,7 @@ fn civil_from_days(z: i64) -> (i64, i64) {
 
 pub fn collect(
     conn: &Connection,
+    user: i64,
     period: &str,
     year: Option<i64>,
     month: Option<i64>,
@@ -138,8 +139,9 @@ pub fn collect(
 
     let count_of = |event: i64| -> Result<i64> {
         Ok(conn.query_row(
-            "SELECT count(*) FROM play_event WHERE event=?1 AND ts>=?2 AND ts<?3",
-            rusqlite::params![event, from, to],
+            "SELECT count(*) FROM play_event
+             WHERE event=?1 AND ts>=?2 AND ts<?3 AND user_id=?4",
+            rusqlite::params![event, from, to, user],
             |r| r.get(0),
         )?)
     };
@@ -160,14 +162,18 @@ pub fn collect(
                   max(coalesce(pe.position_ms,0)) AS mx,
                   (SELECT duration_ms FROM track WHERE id = pe.track_id) AS duration_ms
            FROM play_event pe
-           WHERE pe.ts>=?1 AND pe.ts<?2
+           WHERE pe.ts>=?1 AND pe.ts<?2 AND pe.user_id=?3
            GROUP BY pe.session_id, pe.track_id
          )",
-        [from, to],
+        rusqlite::params![from, to, user],
         |r| r.get(0),
     )?;
 
-    let like_count: i64 = conn.query_row("SELECT count(*) FROM track_like", [], |r| r.get(0))?;
+    let like_count: i64 = conn.query_row(
+        "SELECT count(*) FROM track_like WHERE user_id=?1",
+        [user],
+        |r| r.get(0),
+    )?;
 
     // Distinct tracks and artists touched in the period.
     let (tracks, artists): (i64, i64) = conn.query_row(
@@ -176,18 +182,25 @@ pub fn collect(
          FROM play_event pe
          JOIN track t ON t.id = pe.track_id
          JOIN album al ON al.id = t.album_id
-         WHERE pe.ts>=?1 AND pe.ts<?2",
-        [from, to],
+         WHERE pe.ts>=?1 AND pe.ts<?2 AND pe.user_id=?3",
+        rusqlite::params![from, to, user],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
 
     let top_tracks = tracks_query(
         conn,
+        user,
         from,
         to,
         "ORDER BY plays DESC, hours DESC LIMIT 20",
     )?;
-    let repeat_track = tracks_query(conn, from, to, "ORDER BY repeats DESC, plays DESC LIMIT 1")?
+    let repeat_track = tracks_query(
+        conn,
+        user,
+        from,
+        to,
+        "ORDER BY repeats DESC, plays DESC LIMIT 1",
+    )?
         .into_iter()
         .next();
 
@@ -198,11 +211,11 @@ pub fn collect(
          JOIN track t ON t.id = pe.track_id
          JOIN album al ON al.id = t.album_id
          JOIN artist ar ON ar.id = al.artist_id
-         WHERE pe.event=0 AND pe.ts>=?1 AND pe.ts<?2
+         WHERE pe.event=0 AND pe.ts>=?1 AND pe.ts<?2 AND pe.user_id=?3
          GROUP BY ar.id ORDER BY plays DESC LIMIT 12",
     )?;
     let top_artists: Vec<TopArtist> = stmt
-        .query_map([from, to], |r| {
+        .query_map(rusqlite::params![from, to, user], |r| {
             Ok(TopArtist {
                 name: r.get(0)?,
                 plays: r.get(1)?,
@@ -220,11 +233,11 @@ pub fn collect(
          JOIN track t ON t.id = pe.track_id
          JOIN album al ON al.id = t.album_id
          JOIN artist ar ON ar.id = al.artist_id
-         WHERE pe.event=0 AND pe.ts>=?1 AND pe.ts<?2
+         WHERE pe.event=0 AND pe.ts>=?1 AND pe.ts<?2 AND pe.user_id=?3
          GROUP BY al.id ORDER BY plays DESC LIMIT 12",
     )?;
     let top_albums: Vec<TopAlbum> = stmt
-        .query_map([from, to], |r| {
+        .query_map(rusqlite::params![from, to, user], |r| {
             Ok(TopAlbum {
                 id: r.get(0)?,
                 title: r.get(1)?,
@@ -315,7 +328,13 @@ pub fn collect(
     })
 }
 
-fn tracks_query(conn: &Connection, from: i64, to: i64, tail: &str) -> Result<Vec<TopTrack>> {
+fn tracks_query(
+    conn: &Connection,
+    user: i64,
+    from: i64,
+    to: i64,
+    tail: &str,
+) -> Result<Vec<TopTrack>> {
     let sql = format!(
         "SELECT t.id, t.title, t.artist, t.album_id, t.has_cover,
                 sum(CASE WHEN pe.event=0 THEN 1 ELSE 0 END) AS plays,
@@ -323,12 +342,12 @@ fn tracks_query(conn: &Connection, from: i64, to: i64, tail: &str) -> Result<Vec
                 sum(CASE WHEN pe.event=3 THEN 1 ELSE 0 END) AS completions,
                 coalesce(sum(CASE WHEN pe.event=3 THEN coalesce(t.duration_ms,0) ELSE 0 END),0)/3600000.0 AS hours
          FROM play_event pe JOIN v_track t ON t.id = pe.track_id
-         WHERE pe.ts>=?1 AND pe.ts<?2
+         WHERE pe.ts>=?1 AND pe.ts<?2 AND pe.user_id=?3
          GROUP BY t.id
          {tail}"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([from, to], |r| {
+    let rows = stmt.query_map(rusqlite::params![from, to, user], |r| {
         Ok(TopTrack {
             id: r.get(0)?,
             title: r.get(1)?,
@@ -369,7 +388,8 @@ mod tests {
         let db = crate::db::Db::new(dir.path().join("s.db"));
         db.init().unwrap();
         let conn = db.open().unwrap();
-        let s = collect(&conn, "all", None, None).unwrap();
+        let user = crate::auth::local_user(&conn).unwrap();
+        let s = collect(&conn, user, "all", None, None).unwrap();
         assert_eq!(s.totals.plays, 0);
         assert_eq!(s.months.len(), 12);
     }

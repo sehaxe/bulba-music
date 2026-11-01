@@ -206,7 +206,11 @@ fn embed(pcm: &[f32]) -> (Vec<f32>, f32, f32, f32, f32) {
     }
 
     // mel: mean log energy, centred so loudness differences do not dominate.
-    let mean_log = mel_acc.iter().sum::<f64>() / MEL_BANDS as f64;
+    // The mean has to be per frame like the values it is subtracted from —
+    // without the division every band came out as the same large constant and
+    // the embedding only encoded loudness, which made every pair of tracks look
+    // identical to the recommender.
+    let mean_log = mel_acc.iter().sum::<f64>() / (MEL_BANDS * frames) as f64;
     for i in 0..MEL_BANDS {
         out[i] = ((mel_acc[i] / frames as f64) - mean_log) as f32;
     }
@@ -419,5 +423,83 @@ mod tests {
         let (v, _, _, _, _) = embed(&vec![0.0; SAMPLE_RATE as usize]);
         assert_eq!(v.len(), DIM);
         assert!(v.iter().all(|x| x.is_finite()));
+    }
+}
+
+#[cfg(test)]
+mod discard_test {
+    use super::*;
+
+    fn sine(hz: f32, n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * hz * i as f32 / SAMPLE_RATE as f32).sin() * 0.5)
+            .collect()
+    }
+
+    fn noise(n: usize) -> Vec<f32> {
+        // Deterministic LCG: the test must not depend on a random seed.
+        let mut state: u64 = 0x2545F4914F6CDD1D;
+        (0..n)
+            .map(|_| {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                ((state >> 33) as f32 / u32::MAX as f32) * 2.0 - 1.0
+            })
+            .collect()
+    }
+
+    fn cos(a: &[f32], b: &[f32]) -> f32 {
+        let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+        let na: f32 = a.iter().map(|v| v * v).sum::<f32>().sqrt();
+        let nb: f32 = b.iter().map(|v| v * v).sum::<f32>().sqrt();
+        dot / (na * nb)
+    }
+
+    /// The bug this guards: a mean taken over un-averaged mel sums made every
+    /// band identical, so every track looked the same to the recommender.
+    #[test]
+    fn different_sounds_produce_different_vectors() {
+        let a = embed(&sine(440.0, SAMPLE_RATE as usize * 2)).0;
+        let b = embed(&noise(SAMPLE_RATE as usize * 2)).0;
+        let similarity = cos(&a, &b);
+        assert!(
+            similarity < 0.8,
+            "sine and noise embedded as the same thing (cos={similarity})"
+        );
+    }
+
+    #[test]
+    fn the_sine_lands_in_the_right_mel_band() {
+        let vec = embed(&sine(440.0, SAMPLE_RATE as usize * 2)).0;
+        let peak = (0..MEL_BANDS)
+            .max_by(|a, b| vec[*a].partial_cmp(&vec[*b]).unwrap())
+            .unwrap();
+        // 440 Hz sits low in the mel scale; anywhere in the first quarter is
+        // right, and a peak at the very top would mean the bank is inverted.
+        assert!(peak < MEL_BANDS / 4, "peak at band {peak}");
+    }
+
+    #[test]
+    fn vectors_are_normalised() {
+        let vec = embed(&noise(SAMPLE_RATE as usize)).0;
+        let norm: f32 = vec.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-4, "norm {norm}");
+    }
+}
+
+#[cfg(test)]
+mod debug_extract {
+    use super::*;
+
+    #[test]
+    fn a_real_file_has_a_discriminating_vector() {
+        let path = std::env::var("BULBA_TEST_TRACK").unwrap_or_default();
+        if path.is_empty() || !std::path::Path::new(&path).exists() {
+            return;
+        }
+        let a = extract(&path).unwrap();
+        println!("dim0..8 {:?}", &a.vec[..8]);
+        println!("tail {:?}", &a.vec[40..56]);
+        println!("tempo {} bright {} energy {} mode {}", a.tempo_bpm, a.brightness, a.energy, a.mode);
+        assert!(a.vec.iter().any(|v| v.abs() > 0.01), "vector is all zeros");
     }
 }
