@@ -34,6 +34,8 @@ FLAC-мастера на диске, телефон как тонкий клие
 
 ---
 
+<img src="docs/screenshots/phone.png" width="320" alt="Волна на телефоне"> <img src="docs/screenshots/phone-player.png" width="320" alt="Плеер на телефоне">
+
 ## Архитектура
 
 ```
