@@ -123,7 +123,10 @@ class _ArtistScreenState extends State<ArtistScreen> {
                             style: T.caption(p.mute),
                           ),
                           const SizedBox(height: S.md),
-                          Row(
+                          Wrap(
+                            spacing: S.sm,
+                            runSpacing: S.sm,
+                            crossAxisAlignment: WrapCrossAlignment.center,
                             children: [
                               PillButton(
                                 icon: Icons.play_arrow_rounded,
@@ -146,8 +149,11 @@ class _ArtistScreenState extends State<ArtistScreen> {
                                         widget.player.play(track, queue: queue);
                                       },
                               ),
-                              const SizedBox(width: S.sm),
                               _Heart(liked: _liked, onTap: _toggleLike),
+                              _LinkButton(
+                                path: '/a/${widget.artistId}',
+                                base: widget.api.base,
+                              ),
                             ],
                           ),
                         ],

@@ -62,19 +62,22 @@ class FloatingNav extends StatelessWidget {
             ),
             child: LayoutBuilder(
               builder: (context, box) {
-                return Row(
-                  children: [
-                    for (var i = 0; i < kNavItems.length; i++)
-                      Expanded(
-                        child: _NavIcon(
-                          item: kNavItems[i],
-                          active: i == index,
-                          color: i == index ? accent : p.mute,
-                          highlight: accent,
-                          onTap: () => onSelect(i),
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: S.xs),
+                  child: Row(
+                    children: [
+                      for (var i = 0; i < kNavItems.length; i++)
+                        Expanded(
+                          child: _NavIcon(
+                            item: kNavItems[i],
+                            active: i == index,
+                            color: i == index ? accent : p.mute,
+                            highlight: accent,
+                            onTap: () => onSelect(i),
+                          ),
                         ),
-                      ),
-                  ],
+                    ],
+                  ),
                 );
               },
             ),

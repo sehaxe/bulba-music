@@ -18,6 +18,7 @@ class TrackRow extends StatefulWidget {
     this.liked = false,
     this.onLike,
     this.onMenu,
+    this.subtitle,
   });
 
   final Track track;
@@ -32,6 +33,10 @@ class TrackRow extends StatefulWidget {
 
   /// Opens the shared track sheet (details, play next, radio, like).
   final VoidCallback? onMenu;
+
+  /// Overrides the artist/album line — an album page does not need to repeat
+  /// its own name on all thirteen rows.
+  final String? subtitle;
 
   @override
   State<TrackRow> createState() => _TrackRowState();
@@ -120,9 +125,10 @@ class _TrackRowState extends State<TrackRow> {
                           children: [
                             Flexible(
                               child: Text(
-                                widget.showCover
-                                    ? t.artist
-                                    : '${t.artist} · ${t.album}',
+                                widget.subtitle ??
+                                    (widget.showCover
+                                        ? t.artist
+                                        : '${t.artist} · ${t.album}'),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: T.caption(p.mute),

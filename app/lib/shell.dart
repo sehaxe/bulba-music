@@ -431,7 +431,17 @@ class _ShellState extends State<Shell> {
                 ),
               ),
             if (!wide)
-              FloatingNav(index: _tab, onSelect: _select, accent: _accent),
+              // An opaque strip under the dock: the capsule is translucent, and
+              // list rows showing through it read as a rendering bug.
+              Container(
+                color: p.canvas,
+                padding: const EdgeInsets.only(top: S.xs),
+                child: FloatingNav(
+                  index: _tab,
+                  onSelect: _select,
+                  accent: _accent,
+                ),
+              ),
           ],
         ),
       ),

@@ -155,13 +155,23 @@ class _LibraryScreenState extends State<LibraryScreen> {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(S.xl, S.xxl, S.xl, S.md),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+                child: Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.end,
+                  spacing: S.md,
+                  runSpacing: S.sm,
                   children: [
-                    Text('библиотека', style: T.displayM(p.ink)),
-                    const SizedBox(width: S.sm),
-                    Text('${items.length}', style: T.caption(p.ash)),
-                    const Spacer(),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text('библиотека', style: T.displayM(p.ink)),
+                        const SizedBox(width: S.sm),
+                        Text('${items.length}', style: T.caption(p.ash)),
+                      ],
+                    ),
+                    // The segmented control moves under the title instead of
+                    // pushing "треки" off the screen.
                     _Tabs(
                       value: _mode,
                       onChanged: (v) => setState(() => _mode = v),
