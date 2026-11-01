@@ -218,14 +218,59 @@ pub fn pick(
     let taste = taste_of(&vectors, &stats, artist_of).map(|(v, _)| v);
 
     let base = seed_vec.clone().or_else(|| taste.clone());
-    let base = match base {
-        Some(b) => b,
-        None => {
-            // Nothing played yet: any track is a fair start, and the wave will
-            // learn from the first skip.
-            vectors.values().next().cloned().unwrap_or_default()
+
+    // Cold start: no seed, nothing played. Rather than neighbours of an
+    // arbitrary track, spread the first batch across the library with
+    // farthest-point sampling — a fresh account should hear what the library
+    // contains, not four songs that happen to sit next to each other.
+    if base.is_none() {
+        let mut pool: Vec<(i64, Vec<f32>)> = vectors
+            .iter()
+            .filter(|(id, _)| !excluded.contains(id))
+            .map(|(id, v)| (*id, v.clone()))
+            .collect();
+        pool.sort_by_key(|(id, _)| *id);
+        if pool.is_empty() {
+            return Ok(Vec::new());
         }
-    };
+        // Diversify while choosing, not after: capping at the end threw away
+        // most of the picks when one artist owned the far corners.
+        let mut per_artist: HashMap<i64, i32> = HashMap::new();
+        let mut out = Vec::new();
+        let mut chosen: Vec<Vec<f32>> = Vec::new();
+        while out.len() < req.limit && !pool.is_empty() {
+            let mut best = (f32::MAX, 0usize);
+            for (i, (id, vec)) in pool.iter().enumerate() {
+                let artist = artist_of.get(id).copied().unwrap_or(-1);
+                if per_artist.get(&artist).copied().unwrap_or(0) >= 2 {
+                    continue;
+                }
+                let worst = chosen
+                    .iter()
+                    .map(|c| cos(vec, c))
+                    .fold(f32::MIN, f32::max);
+                if worst < best.0 {
+                    best = (worst, i);
+                }
+            }
+            if !best.0.is_finite() {
+                break;
+            }
+            let (id, vec) = pool.remove(best.1);
+            let artist = artist_of.get(&id).copied().unwrap_or(-1);
+            *per_artist.entry(artist).or_insert(0) += 1;
+            chosen.push(vec);
+            out.push(WaveItem {
+                track_id: id,
+                score: 0.0,
+                reason: "первое знакомство: по одному из каждой части библиотеки"
+                    .to_string(),
+            });
+        }
+        return Ok(out);
+    }
+
+    let base = base.unwrap_or_default();
 
     let ts = now();
     let mut scored: Vec<(i64, f64, Why)> = Vec::new();
@@ -565,6 +610,31 @@ mod tests {
         }
         let items = pick(&conn, &req, &artists, &HashMap::new(), &HashMap::new()).unwrap();
         assert!(items.len() <= 2, "same artist repeated: {}", items.len());
+    }
+
+    #[test]
+    fn a_cold_start_spreads_across_the_library() {
+        let (_d, conn) = setup();
+        let req = Request {
+            user: crate::auth::local_user(&conn).unwrap(),
+            seed: None,
+            exclude: &[],
+            limit: 4,
+            novelty: 0.5,
+            seed_title: None,
+        };
+        let mut artists = HashMap::new();
+        for id in 1..=5 {
+            artists.insert(id as i64, if id <= 3 { 1 } else { 2 });
+        }
+        let got = pick(&conn, &req, &artists, &HashMap::new(), &HashMap::new()).unwrap();
+        assert!(!got.is_empty());
+        assert!(got.iter().all(|i| i.reason.contains("первое знакомство")));
+        let artists_hit: std::collections::HashSet<i64> = got
+            .iter()
+            .filter_map(|i| artists.get(&i.track_id).copied())
+            .collect();
+        assert_eq!(artists_hit.len(), 2, "cold start stayed in one cluster");
     }
 
     #[test]
