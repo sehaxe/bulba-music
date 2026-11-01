@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../design/components.dart';
 import '../design/tokens.dart';
-import '../player/controller.dart';
 
 /// The waveform is mirrored around a centre line — the "sound bar in both
 /// directions" — and doubles as the seek surface: tap to jump, drag to scrub.

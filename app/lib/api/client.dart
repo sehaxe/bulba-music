@@ -682,8 +682,9 @@ class Api {
     final r = await _http
         .get(Uri.parse('$base/api/likes/albums/ids'))
         .timeout(const Duration(seconds: 15));
-    if (r.statusCode != 200)
+    if (r.statusCode != 200) {
       throw ApiException('album likes → ${r.statusCode}');
+    }
     return (jsonDecode(r.body) as List<dynamic>).cast<int>();
   }
 
@@ -699,8 +700,9 @@ class Api {
     final r = await _http
         .get(Uri.parse('$base/api/likes/artists/ids'))
         .timeout(const Duration(seconds: 15));
-    if (r.statusCode != 200)
+    if (r.statusCode != 200) {
       throw ApiException('artist likes → ${r.statusCode}');
+    }
     return (jsonDecode(r.body) as List<dynamic>).cast<int>();
   }
 
@@ -709,8 +711,9 @@ class Api {
     final r = on
         ? await _http.post(uri).timeout(const Duration(seconds: 15))
         : await _http.delete(uri).timeout(const Duration(seconds: 15));
-    if (r.statusCode != 200)
+    if (r.statusCode != 200) {
       throw ApiException('artist like → ${r.statusCode}');
+    }
   }
 
   Future<Map<String, dynamic>> normalize({bool apply = false}) async {

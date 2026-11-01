@@ -252,7 +252,6 @@ class _ShellState extends State<Shell> {
     );
   }
 
-  @override
   /// True while a text field owns the keyboard. Shortcuts are checked before
   /// the focused widget sees the key, so without this guard typing a space in
   /// search would pause the track instead of entering a space.
@@ -270,6 +269,7 @@ class _ShellState extends State<Shell> {
     return typing;
   }
 
+  @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
     final size = MediaQuery.sizeOf(context);
