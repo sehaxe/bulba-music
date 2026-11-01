@@ -1,13 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart' show Media, Player;
 
 import '../api/client.dart';
+import 'signals.dart';
 
 /// Owns the audio deck and the queue. The transition engine will sit between
 /// this object and the output device; for now it opens one stream at a time and
 /// reports its clock.
 class PlayerController extends ChangeNotifier {
-  PlayerController(this.api) {
+  PlayerController(this.api) : signals = SignalLog(api) {
     _player.stream.position.listen((p) {
       _position = p;
       _anchor = p;
@@ -25,12 +28,24 @@ class PlayerController extends ChangeNotifier {
       notifyListeners();
     });
     _player.stream.completed.listen((done) {
-      if (done) next();
+      if (!done) return;
+      final t = current;
+      if (t != null) {
+        signals.add(
+          t,
+          event: SignalLog.completed,
+          position: _duration,
+          length: _duration,
+        );
+      }
+      next();
     });
   }
 
   final Api api;
+  final SignalLog signals;
   final Player _player = Player();
+  Timer? _progress;
 
   Track? current;
   List<Track> _queue = const [];
@@ -62,7 +77,29 @@ class PlayerController extends ChangeNotifier {
     return (_position.inMilliseconds / total).clamp(0.0, 1.0);
   }
 
-  Future<void> play(Track track, {List<Track>? queue}) async {
+  Future<void> play(
+    Track track, {
+    List<Track>? queue,
+    int source = SignalLog.srcQueue,
+  }) async {
+    final previous = current;
+    if (previous != null && previous.id != track.id) {
+      // Leaving a track early is a skip only before it has been meaningfully
+      // heard: under 20% or under 20 seconds.
+      final ratio = _duration.inMilliseconds <= 0
+          ? 0.0
+          : position.inMilliseconds / _duration.inMilliseconds;
+      if (ratio < 0.2 || position.inSeconds < 20) {
+        signals.add(
+          previous,
+          event: SignalLog.skipped,
+          position: position,
+          length: _duration,
+          source: source,
+          prevTrackId: track.id,
+        );
+      }
+    }
     if (queue != null) {
       _queue = queue;
       _index = queue.indexWhere((t) => t.id == track.id);
@@ -73,6 +110,26 @@ class PlayerController extends ChangeNotifier {
     _anchorAt = DateTime.now();
     _duration = track.duration;
     notifyListeners();
+    signals.add(
+      track,
+      event: SignalLog.started,
+      position: Duration.zero,
+      length: track.duration,
+      source: source,
+      prevTrackId: previous?.id,
+    );
+    _progress?.cancel();
+    _progress = Timer.periodic(const Duration(seconds: 15), (_) {
+      final t = current;
+      if (t != null && _playing) {
+        signals.add(
+          t,
+          event: SignalLog.progressed,
+          position: position,
+          length: _duration,
+        );
+      }
+    });
     await _player.open(Media(api.stream(track.id).toString()));
   }
 
@@ -112,6 +169,8 @@ class PlayerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _progress?.cancel();
+    signals.flush();
     _player.dispose();
     super.dispose();
   }

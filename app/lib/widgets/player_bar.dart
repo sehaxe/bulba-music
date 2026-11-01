@@ -5,9 +5,9 @@ import '../design/components.dart';
 import '../design/tokens.dart';
 import '../player/controller.dart';
 
-/// Compact player docked above the navigation. Two controls only — everything
-/// else lives one level down, in the full screen. On desktop it also carries
-/// the one control a desktop always needs: volume.
+/// Compact player docked above the navigation. Transport sits in the centre,
+/// the track on the left, output level on the right — the layout every music
+/// player has converged on, and for good reason.
 class PlayerBar extends StatelessWidget {
   const PlayerBar({
     super.key,
@@ -43,17 +43,20 @@ class PlayerBar extends StatelessWidget {
           children: [
             SizedBox(
               height: 2,
-              child: Stack(
-                children: [
-                  Positioned.fill(child: ColoredBox(color: p.hairline)),
-                  FractionallySizedBox(
-                    widthFactor: player.progress,
-                    child: ColoredBox(
-                      color: accent,
-                      child: const SizedBox.expand(),
+              child: FrameTicker(
+                playing: player.playing,
+                builder: (context) => Stack(
+                  children: [
+                    Positioned.fill(child: ColoredBox(color: p.hairline)),
+                    FractionallySizedBox(
+                      widthFactor: player.progress,
+                      child: ColoredBox(
+                        color: accent,
+                        child: const SizedBox.expand(),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
             Expanded(
@@ -61,57 +64,42 @@ class PlayerBar extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: S.lg),
                 child: Row(
                   children: [
-                    Hero(
-                      tag: 'now-cover',
-                      child: CoverArt(
-                        url: api.cover(t.albumId, t.hasCover),
-                        size: 42,
-                        radius: 8,
-                        animate: false,
-                      ),
-                    ),
-                    const SizedBox(width: S.md),
                     Expanded(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            t.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: T.bodyStrong(p.ink),
-                          ),
-                          FrameTicker(
-                            playing: player.playing,
-                            builder: (context) => Text(
-                              '${t.artist} · ${mmss(player.position)}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: T.micro(p.mute),
-                            ),
-                          ),
-                        ],
+                      child: _Info(t: t, api: api, player: player, p: p),
+                    ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _CircleButton(
+                          icon: Icons.skip_previous_rounded,
+                          onTap: player.previous,
+                          size: 34,
+                        ),
+                        const SizedBox(width: S.xxs),
+                        _CircleButton(
+                          icon: player.playing
+                              ? Icons.pause_rounded
+                              : Icons.play_arrow_rounded,
+                          onTap: player.toggle,
+                          size: 44,
+                          filled: true,
+                          accent: accent,
+                        ),
+                        const SizedBox(width: S.xxs),
+                        _CircleButton(
+                          icon: Icons.skip_next_rounded,
+                          onTap: player.next,
+                          size: 34,
+                        ),
+                      ],
+                    ),
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: showVolume
+                            ? _Volume(player: player, accent: accent)
+                            : const SizedBox.shrink(),
                       ),
-                    ),
-                    if (showVolume) ...[
-                      _Volume(player: player, accent: accent),
-                      const SizedBox(width: S.lg),
-                    ],
-                    _CircleButton(
-                      icon: player.playing
-                          ? Icons.pause_rounded
-                          : Icons.play_arrow_rounded,
-                      onTap: player.toggle,
-                      size: 42,
-                      filled: true,
-                      accent: accent,
-                    ),
-                    const SizedBox(width: S.xs),
-                    _CircleButton(
-                      icon: Icons.skip_next_rounded,
-                      onTap: player.next,
-                      size: 38,
                     ),
                   ],
                 ),
@@ -124,8 +112,62 @@ class PlayerBar extends StatelessWidget {
   }
 }
 
-/// Speaker icon plus a hairline slider. Clicking the icon mutes; the slider
-/// keeps its own drag state so the bar does not rebuild mid-gesture.
+class _Info extends StatelessWidget {
+  const _Info({
+    required this.t,
+    required this.api,
+    required this.player,
+    required this.p,
+  });
+
+  final Track t;
+  final Api api;
+  final PlayerController player;
+  final Palette p;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Hero(
+          tag: 'now-cover',
+          child: CoverArt(
+            url: api.cover(t.albumId, t.hasCover),
+            size: 42,
+            radius: 8,
+            animate: false,
+          ),
+        ),
+        const SizedBox(width: S.md),
+        Expanded(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                t.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: T.bodyStrong(p.ink),
+              ),
+              FrameTicker(
+                playing: player.playing,
+                builder: (context) => Text(
+                  '${t.artist} · ${mmss(player.position)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: T.micro(p.mute),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Speaker icon plus a hairline slider. Clicking the icon mutes.
 class _Volume extends StatefulWidget {
   const _Volume({required this.player, required this.accent});
   final PlayerController player;

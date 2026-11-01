@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import 'api/client.dart';
@@ -9,13 +11,21 @@ import 'screens/home.dart';
 import 'screens/library.dart';
 import 'screens/player_screen.dart';
 import 'screens/radio.dart';
+import 'screens/search.dart';
+import 'screens/settings.dart';
 import 'widgets/nav.dart';
 import 'widgets/player_bar.dart';
 
 class Shell extends StatefulWidget {
-  const Shell({super.key, required this.api, required this.player});
+  const Shell({
+    super.key,
+    required this.api,
+    required this.player,
+    required this.themeMode,
+  });
   final Api api;
   final PlayerController player;
+  final ValueNotifier<ThemeMode> themeMode;
 
   @override
   State<Shell> createState() => _ShellState();
@@ -25,7 +35,6 @@ class _ShellState extends State<Shell> {
   List<Track> _tracks = const [];
   String? _error;
   bool _loading = true;
-  int _rev = 0, _albums = 0, _artists = 0;
   int _tab = 0;
   Color _accent = C.signal;
   int? _accentTrack;
@@ -62,16 +71,15 @@ class _ShellState extends State<Shell> {
     });
     try {
       final tracks = await widget.api.tracks();
-      final health = await widget.api.health();
       if (!mounted) return;
       setState(() {
         _tracks = tracks;
-        _rev = (health['rev'] ?? 0) as int;
-        _albums = (health['albums'] ?? 0) as int;
-        _artists = (health['artists'] ?? 0) as int;
         _loading = false;
       });
-      if (const bool.fromEnvironment('SHOT_PLAYER') && tracks.isNotEmpty) {
+      final autoPlay =
+          const bool.fromEnvironment('SHOT_PLAYER') ||
+          Platform.environment['BULBA_AUTOPLAY'] == '1';
+      if (autoPlay && tracks.isNotEmpty) {
         await widget.player.play(tracks.first, queue: tracks);
         if (mounted) _openPlayer();
       }
@@ -135,16 +143,19 @@ class _ShellState extends State<Shell> {
 
     final body = Column(
       children: [
+        if (_error != null && !_loading)
+          Container(
+            width: double.infinity,
+            color: C.danger.withValues(alpha: 0.12),
+            padding: const EdgeInsets.symmetric(horizontal: S.lg, vertical: 6),
+            child: Text(
+              'offline · $_error',
+              style: T.micro(C.danger),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
         Expanded(child: _screen()),
-        Hr(color: p.hairline),
-        _StatusBar(
-          tracks: _tracks.length,
-          albums: _albums,
-          artists: _artists,
-          rev: _rev,
-          error: _error,
-          loading: _loading,
-        ),
       ],
     );
 
@@ -240,78 +251,65 @@ class _ShellState extends State<Shell> {
           onRescan: _rescan,
         );
       case 1:
+        return SearchScreen(
+          api: widget.api,
+          player: widget.player,
+          onRadio: _startRadio,
+        );
+      case 2:
         return LibraryScreen(
           tracks: _tracks,
           api: widget.api,
           player: widget.player,
           onRadio: _startRadio,
         );
-      case 2:
+      case 3:
         return RadioScreen(
           player: widget.player,
           api: widget.api,
           onRadio: _startRadio,
         );
-      case 3:
-        return const PlaceholderScreen(
-          title: 'downloads',
-          note: 'offline cache and sync',
-        );
       default:
-        return const PlaceholderScreen(
-          title: 'settings',
-          note: 'server, crossfade, quality',
+        return SettingsScreen(
+          api: widget.api,
+          themeMode: widget.themeMode,
+          onRescan: _rescan,
         );
     }
   }
 }
 
-class _StatusBar extends StatelessWidget {
-  const _StatusBar({
-    required this.tracks,
-    required this.albums,
-    required this.artists,
-    required this.rev,
-    required this.error,
-    required this.loading,
-  });
+class _WindowControl extends StatefulWidget {
+  @override
+  State<_WindowControl> createState() => _WindowControlState();
+}
 
-  final int tracks;
-  final int albums;
-  final int artists;
-  final int rev;
-  final String? error;
-  final bool loading;
+class _WindowControlState extends State<_WindowControl> {
+  bool _hover = false;
 
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
-    final state = error != null
-        ? 'offline'
-        : loading
-        ? 'scanning'
-        : 'online';
-    return Container(
-      height: 24,
-      padding: const EdgeInsets.symmetric(horizontal: S.lg),
-      child: Row(
-        children: [
-          Text(
-            '$tracks tracks  ·  $albums albums  ·  $artists artists  ·  rev $rev',
-            style: T.micro(p.ash),
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: () => exit(0),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(
+            color: _hover ? C.danger : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
           ),
-          const Spacer(),
-          Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(
-              color: error != null ? C.danger : const Color(0xFF30D158),
-              shape: BoxShape.circle,
-            ),
+          child: Icon(
+            Icons.close_rounded,
+            size: 17,
+            color: _hover ? Colors.white : p.ash,
           ),
-          const SizedBox(width: S.sm),
-          Text(state, style: T.micro(p.ash)),
-        ],
+        ),
       ),
     );
   }

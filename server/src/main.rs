@@ -23,9 +23,34 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
 
-    let library = arg(&args, "--library")
-        .or_else(|| std::env::var("BULBA_LIBRARY").ok())
-        .unwrap_or(format!("{home}/Music"));
+    let mut libraries: Vec<PathBuf> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--library" {
+            if let Some(v) = args.get(i + 1) {
+                libraries.push(PathBuf::from(v));
+            }
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    if libraries.is_empty() {
+        let env = std::env::var("BULBA_LIBRARY").unwrap_or(format!("{home}/Music"));
+        libraries = env.split(':').map(PathBuf::from).collect();
+    }
+    let mut ignores: Vec<String> = vec!["Telegram Desktop".into(), "ChatExport_".into()];
+    let mut j = 0;
+    while j < args.len() {
+        if args[j] == "--ignore" {
+            if let Some(v) = args.get(j + 1) {
+                ignores.push(v.clone());
+            }
+            j += 2;
+            continue;
+        }
+        j += 1;
+    }
     let db_path = arg(&args, "--db")
         .or_else(|| std::env::var("BULBA_DB").ok())
         .unwrap_or(format!("{home}/.local/share/bulba-music/bulba.db"));
@@ -34,8 +59,19 @@ async fn main() -> Result<()> {
     db.init()?;
 
     if args.iter().any(|a| a == "scan") {
-        let report = scan::scan(&db, &PathBuf::from(&library))?;
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        let mut total = scan::ScanReport::default();
+        for root in &libraries {
+            let r = scan::scan(&db, root, &ignores)?;
+            total.scanned += r.scanned;
+            total.masters_added += r.masters_added;
+            total.masters_updated += r.masters_updated;
+            total.masters_removed += r.masters_removed;
+            total.tracks_created += r.tracks_created;
+            total.unchanged += r.unchanged;
+            total.errors.extend(r.errors);
+            total.rev = r.rev.max(total.rev);
+        }
+        println!("{}", serde_json::to_string_pretty(&total)?);
         return Ok(());
     }
 
@@ -46,7 +82,8 @@ async fn main() -> Result<()> {
 
     let state = AppState {
         db,
-        library: PathBuf::from(library),
+        libraries,
+        ignores,
     };
 
     tracing::info!("bulba music server on http://{addr}");

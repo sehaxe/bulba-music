@@ -238,7 +238,7 @@ fn reindex_fts(tx: &Transaction, track_id: i64) -> Result<()> {
     Ok(())
 }
 
-pub fn scan(db: &Db, root: &Path) -> Result<ScanReport> {
+pub fn scan(db: &Db, root: &Path, ignores: &[String]) -> Result<ScanReport> {
     let mut conn = db.open()?;
     let covers_dir = db
         .path()
@@ -270,6 +270,10 @@ pub fn scan(db: &Db, root: &Path) -> Result<ScanReport> {
 
     for entry in WalkDir::new(root).follow_links(true).into_iter().filter_map(|e| e.ok()) {
         if !entry.file_type().is_file() || !is_audio(entry.path()) {
+            continue;
+        }
+        let path_str_early = entry.path().to_string_lossy();
+        if ignores.iter().any(|i| !i.is_empty() && path_str_early.contains(i.as_str())) {
             continue;
         }
         report.scanned += 1;

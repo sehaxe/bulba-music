@@ -13,9 +13,9 @@ class NavItemData {
 
 const kNavItems = <NavItemData>[
   NavItemData(Icons.home_rounded, 'home'),
+  NavItemData(Icons.search_rounded, 'search'),
   NavItemData(Icons.grid_view_rounded, 'library'),
   NavItemData(Icons.graphic_eq_rounded, 'radio'),
-  NavItemData(Icons.download_rounded, 'downloads'),
   NavItemData(Icons.tune_rounded, 'settings'),
 ];
 

@@ -74,6 +74,28 @@ class Track {
   }
 }
 
+class Mix {
+  const Mix({
+    required this.id,
+    required this.title,
+    required this.note,
+    required this.tracks,
+  });
+  final String id;
+  final String title;
+  final String note;
+  final List<Track> tracks;
+
+  factory Mix.fromJson(Map<String, dynamic> j) => Mix(
+    id: j['id'] as String,
+    title: j['title'] as String,
+    note: (j['note'] ?? '') as String,
+    tracks: (j['tracks'] as List<dynamic>)
+        .map((e) => Track.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false),
+  );
+}
+
 class ApiException implements Exception {
   ApiException(this.message);
   final String message;
@@ -131,6 +153,50 @@ class Api {
   }
 
   Uri stream(int id) => Uri.parse('$base/api/tracks/$id/stream');
+
+  Future<void> postEvents(List<Map<String, dynamic>> events) async {
+    if (events.isEmpty) return;
+    final r = await _http
+        .post(
+          Uri.parse('$base/api/events'),
+          headers: {'content-type': 'application/json'},
+          body: jsonEncode(events),
+        )
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) {
+      throw ApiException('events → ${r.statusCode}');
+    }
+  }
+
+  Future<List<Track>> search(String query, {int limit = 60}) async {
+    final r = await _http
+        .get(
+          Uri.parse(
+            '$base/api/search?q=${Uri.encodeQueryComponent(query)}&limit=$limit',
+          ),
+        )
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) {
+      throw ApiException('search → ${r.statusCode}');
+    }
+    final list = jsonDecode(r.body) as List<dynamic>;
+    return list
+        .map((e) => Track.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false);
+  }
+
+  Future<List<Mix>> homeMixes() async {
+    final r = await _http
+        .get(Uri.parse('$base/api/recs/home'))
+        .timeout(const Duration(seconds: 30));
+    if (r.statusCode != 200) {
+      throw ApiException('recs/home → ${r.statusCode}');
+    }
+    final list = jsonDecode(r.body) as List<dynamic>;
+    return list
+        .map((e) => Mix.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false);
+  }
 
   Future<List<Track>> similar(int id, {int n = 30}) async {
     final r = await _http

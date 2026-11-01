@@ -15,7 +15,8 @@ use std::path::PathBuf;
 #[derive(Clone, Debug)]
 pub struct AppState {
     pub db: Db,
-    pub library: PathBuf,
+    pub libraries: Vec<PathBuf>,
+    pub ignores: Vec<String>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -30,6 +31,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/tracks/{id}/peaks", get(peaks))
         .route("/api/features/build", post(build_features))
         .route("/api/recs/similar/{id}", get(similar))
+        .route("/api/recs/home", get(home_mixes))
         .route("/api/manifest", get(manifest))
         .route("/api/events", post(record_events))
         .with_state(state)
@@ -99,11 +101,13 @@ pub struct Track {
     pub channels: Option<i64>,
     pub bytes: Option<i64>,
     pub master_count: i64,
+    pub created_at: i64,
     pub rev: i64,
 }
 
 const TRACK_COLUMNS: &str = "id, title, artist, album, album_id, has_cover, year, disc,
-    track_no, duration_ms, codec, bitrate, sample_rate, bits, channels, bytes, master_count, rev";
+    track_no, duration_ms, codec, bitrate, sample_rate, bits, channels, bytes, master_count,
+    created_at, rev";
 
 fn map_track(r: &rusqlite::Row) -> rusqlite::Result<Track> {
     Ok(Track {
@@ -124,7 +128,8 @@ fn map_track(r: &rusqlite::Row) -> rusqlite::Result<Track> {
         channels: r.get(14)?,
         bytes: r.get(15)?,
         master_count: r.get(16)?,
-        rev: r.get(17)?,
+        created_at: r.get(17)?,
+        rev: r.get(18)?,
     })
 }
 
@@ -145,14 +150,30 @@ async fn health(State(st): State<AppState>) -> Result<Json<serde_json::Value>, A
         "artists": stats.1,
         "albums": stats.2,
         "rev": stats.3,
-        "library": st.library,
+        "libraries": st.libraries,
     })))
 }
 
 async fn run_scan(State(st): State<AppState>) -> Result<Json<scan::ScanReport>, ApiError> {
     let db = st.db.clone();
-    let library = st.library.clone();
-    let report = tokio::task::spawn_blocking(move || scan::scan(&db, &library)).await??;
+    let libraries = st.libraries.clone();
+    let ignores = st.ignores.clone();
+    let report = tokio::task::spawn_blocking(move || -> anyhow::Result<scan::ScanReport> {
+        let mut total = scan::ScanReport::default();
+        for root in &libraries {
+            let r = scan::scan(&db, root, &ignores)?;
+            total.scanned += r.scanned;
+            total.masters_added += r.masters_added;
+            total.masters_updated += r.masters_updated;
+            total.masters_removed += r.masters_removed;
+            total.tracks_created += r.tracks_created;
+            total.unchanged += r.unchanged;
+            total.errors.extend(r.errors);
+            total.rev = r.rev.max(total.rev);
+        }
+        Ok(total)
+    })
+    .await??;
     Ok(Json(report))
 }
 
@@ -419,6 +440,198 @@ async fn build_features(
         "remaining": stats.1,
         "model": crate::features::MODEL,
     })))
+}
+
+#[derive(Debug, Serialize)]
+struct Mix {
+    id: String,
+    title: String,
+    note: String,
+    tracks: Vec<Track>,
+}
+
+fn query_tracks(conn: &rusqlite::Connection, sql: &str, params: &[&dyn rusqlite::ToSql]) -> anyhow::Result<Vec<Track>> {
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map(params, map_track)?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+fn seed_vector(conn: &rusqlite::Connection, id: i64) -> anyhow::Result<Option<Vec<f32>>> {
+    let blob: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT vec FROM embed WHERE track_id=?1 AND model=?2",
+            rusqlite::params![id, crate::features::MODEL],
+            |r| r.get(0),
+        )
+        .ok();
+    Ok(blob.map(|b| crate::features::from_blob(&b)))
+}
+
+fn similar_scored(
+    conn: &rusqlite::Connection,
+    seed: &[f32],
+    exclude: Option<i64>,
+    n: usize,
+) -> anyhow::Result<Vec<(i64, f32)>> {
+    let mut stmt = conn.prepare(
+        "SELECT track_id, vec FROM embed WHERE model=?1 AND (?2 IS NULL OR track_id<>?2)",
+    )?;
+    let mut scored: Vec<(i64, f32)> = stmt
+        .query_map(
+            rusqlite::params![crate::features::MODEL, exclude],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)),
+        )?
+        .filter_map(|r| r.ok())
+        .map(|(id, blob)| (id, crate::features::cosine(seed, &crate::features::from_blob(&blob))))
+        .collect();
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(n);
+    Ok(scored)
+}
+
+fn tracks_by_ids(conn: &rusqlite::Connection, ids: &[i64]) -> anyhow::Result<Vec<Track>> {
+    let mut stmt = conn.prepare(&format!("SELECT {TRACK_COLUMNS} FROM v_track WHERE id=?1"))?;
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Ok(t) = stmt.query_row([id], map_track) {
+            out.push(t);
+        }
+    }
+    Ok(out)
+}
+
+/// The "for you" page: mixes that can be built from what the library already
+/// knows, before any taste model exists. Empty mixes are dropped, so a fresh
+/// library shows only what is honest.
+async fn home_mixes(State(st): State<AppState>) -> Result<Json<Vec<Mix>>, ApiError> {
+    let db = st.db.clone();
+    let mixes = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Mix>> {
+        let conn = db.open()?;
+        let mut out: Vec<Mix> = Vec::new();
+        let cols = TRACK_COLUMNS
+            .split(',')
+            .map(|c| format!("v.{}", c.trim()))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let recent = query_tracks(
+            &conn,
+            &format!("SELECT {cols} FROM v_track v ORDER BY v.created_at DESC, v.id DESC LIMIT 12"),
+            &[],
+        )?;
+        if !recent.is_empty() {
+            out.push(Mix {
+                id: "new".into(),
+                title: "новое в библиотеке".into(),
+                note: "последние добавленные".into(),
+                tracks: recent,
+            });
+        }
+
+        let repeated = query_tracks(
+            &conn,
+            &format!(
+                "SELECT {cols} FROM v_track v
+                 JOIN (SELECT track_id, count(*) c FROM play_event
+                       WHERE event=3 AND ts > unixepoch()-30*86400
+                       GROUP BY track_id ORDER BY c DESC LIMIT 15) e ON e.track_id = v.id"
+            ),
+            &[],
+        )?;
+        if repeated.len() > 2 {
+            out.push(Mix {
+                id: "repeat".into(),
+                title: "на повторе".into(),
+                note: "дослушано за месяц".into(),
+                tracks: repeated,
+            });
+        }
+
+        let last: Option<i64> = conn
+            .query_row("SELECT track_id FROM play_event ORDER BY id DESC LIMIT 1", [], |r| {
+                r.get(0)
+            })
+            .ok();
+
+        if let Some(last_id) = last {
+            if let Some(seed) = seed_vector(&conn, last_id)? {
+                let scored = similar_scored(&conn, &seed, Some(last_id), 20)?;
+                let ids: Vec<i64> = scored.iter().map(|(id, _)| *id).collect();
+                let tracks = tracks_by_ids(&conn, &ids)?;
+                if !tracks.is_empty() {
+                    out.push(Mix {
+                        id: "radio".into(),
+                        title: "продолжение".into(),
+                        note: "похоже на последнее".into(),
+                        tracks,
+                    });
+                }
+            }
+        }
+
+        // Deep cuts: never played, ranked by closeness to the last five plays.
+        let played_seeds: Vec<i64> = {
+            let mut stmt = conn.prepare(
+                "SELECT track_id FROM play_event GROUP BY track_id ORDER BY max(id) DESC LIMIT 5",
+            )?;
+            stmt.query_map([], |r| r.get(0))?.filter_map(|r| r.ok()).collect()
+        };
+        if !played_seeds.is_empty() {
+            let mut best: std::collections::HashMap<i64, f32> = std::collections::HashMap::new();
+            for seed_id in &played_seeds {
+                if let Some(seed) = seed_vector(&conn, *seed_id)? {
+                    for (id, score) in similar_scored(&conn, &seed, None, 60)? {
+                        let e = best.entry(id).or_insert(0.0);
+                        if score > *e {
+                            *e = score;
+                        }
+                    }
+                }
+            }
+            let mut unplayed: Vec<(i64, f32)> = best
+                .into_iter()
+                .filter(|(id, _)| {
+                    conn.query_row(
+                        "SELECT count(*) FROM play_event WHERE track_id=?1",
+                        [id],
+                        |r| r.get::<_, i64>(0),
+                    )
+                    .unwrap_or(1)
+                        == 0
+                })
+                .collect();
+            unplayed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            unplayed.truncate(15);
+            let ids: Vec<i64> = unplayed.iter().map(|(id, _)| *id).collect();
+            let tracks = tracks_by_ids(&conn, &ids)?;
+            if tracks.len() > 2 {
+                out.push(Mix {
+                    id: "deep".into(),
+                    title: "глубокие нарезки".into(),
+                    note: "ещё не играло, но похоже".into(),
+                    tracks,
+                });
+            }
+        }
+
+        let random = query_tracks(
+            &conn,
+            &format!("SELECT {cols} FROM v_track v ORDER BY random() LIMIT 25"),
+            &[],
+        )?;
+        if random.len() > 2 {
+            out.push(Mix {
+                id: "shuffle".into(),
+                title: "перемешать всё".into(),
+                note: "случайная выборка".into(),
+                tracks: random,
+            });
+        }
+
+        Ok(out)
+    })
+    .await??;
+    Ok(Json(mixes))
 }
 
 #[derive(Debug, Deserialize)]

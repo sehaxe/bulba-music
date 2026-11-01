@@ -160,7 +160,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS track_fts USING fts5(
   tokenize='unicode61 remove_diacritics 2'
 );
 
-CREATE VIEW IF NOT EXISTS v_track AS
+DROP VIEW IF EXISTS v_track;
+CREATE VIEW v_track AS
 SELECT
   t.id, t.title,
   ar.name  AS artist,
@@ -182,6 +183,7 @@ SELECT
   (SELECT m.bytes FROM track_master tm JOIN master m ON m.id = tm.master_id
     WHERE tm.track_id = t.id ORDER BY (m.codec = 'flac') DESC, m.bytes DESC LIMIT 1) AS bytes,
   (SELECT count(*) FROM track_master tm WHERE tm.track_id = t.id) AS master_count,
+  t.created_at,
   t.rev
 FROM track t
 JOIN album  al ON al.id = t.album_id

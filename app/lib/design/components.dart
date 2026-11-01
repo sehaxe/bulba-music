@@ -205,12 +205,14 @@ class CoverArt extends StatefulWidget {
     required this.size,
     this.radius = R.art,
     this.animate = true,
+    this.border = true,
   });
 
   final String? url;
   final double size;
   final double radius;
   final bool animate;
+  final bool border;
 
   @override
   State<CoverArt> createState() => _CoverArtState();
@@ -277,7 +279,7 @@ class _CoverArtState extends State<CoverArt>
         width: widget.size,
         height: widget.size,
         decoration: BoxDecoration(
-          border: Border.all(color: p.hairline),
+          border: widget.border ? Border.all(color: p.hairline) : null,
           color: p.card,
         ),
         child: AnimatedBuilder(
@@ -292,8 +294,12 @@ class _CoverArtState extends State<CoverArt>
 }
 
 class BayerClipper extends CustomClipper<Path> {
-  BayerClipper(this.t);
+  BayerClipper(this.t, {this.cells = 18, this.radial = false});
   final double t;
+  final int cells;
+
+  /// Reveal from the centre outward: ordered noise plus a radial bias.
+  final bool radial;
 
   static const _bayer = <List<int>>[
     [0, 8, 2, 10],
@@ -305,12 +311,18 @@ class BayerClipper extends CustomClipper<Path> {
   @override
   Path getClip(Size size) {
     final path = Path();
-    const n = 18;
+    final n = cells;
     final cw = size.width / n;
     final ch = size.height / n;
     for (var y = 0; y < n; y++) {
       for (var x = 0; x < n; x++) {
-        final threshold = (_bayer[y % 4][x % 4] + 0.5) / 16;
+        var threshold = (_bayer[y % 4][x % 4] + 0.5) / 16;
+        if (radial) {
+          final dx = (x + 0.5) / n - 0.5;
+          final dy = (y + 0.5) / n - 0.5;
+          final d = math.sqrt(dx * dx + dy * dy) / 0.71;
+          threshold = threshold * 0.55 + d * 0.45;
+        }
         if (threshold <= t) {
           path.addRect(Rect.fromLTWH(x * cw, y * ch, cw + 0.5, ch + 0.5));
         }
@@ -320,7 +332,7 @@ class BayerClipper extends CustomClipper<Path> {
   }
 
   @override
-  bool shouldReclip(BayerClipper old) => old.t != t;
+  bool shouldReclip(BayerClipper old) => old.t != t || old.cells != cells;
 }
 
 /// Terminal-redraw title: characters resolve left to right out of random

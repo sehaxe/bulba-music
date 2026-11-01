@@ -94,6 +94,7 @@ class PlayerScreen extends StatelessWidget {
                                           url: coverUrl,
                                           size: art,
                                           radius: 14,
+                                          border: false,
                                         ),
                                       ),
                                     ),

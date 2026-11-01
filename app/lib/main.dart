@@ -37,6 +37,14 @@ class _BulbaAppState extends State<BulbaApp> {
   /// reviewed without a rebuild: `BULBA_THEME=light ./bulba_music`.
   String get _themeName => Platform.environment['BULBA_THEME'] ?? _forceTheme;
 
+  late final ValueNotifier<ThemeMode> themeMode = ValueNotifier(
+    switch (_themeName) {
+      'light' => ThemeMode.light,
+      'dark' => ThemeMode.dark,
+      _ => ThemeMode.system,
+    },
+  );
+
   late final Api api = Api(
     const String.fromEnvironment(
       'BULBA_SERVER',
@@ -64,6 +72,7 @@ class _BulbaAppState extends State<BulbaApp> {
 
   @override
   void dispose() {
+    themeMode.dispose();
     player.dispose();
     super.dispose();
   }
@@ -98,17 +107,16 @@ class _BulbaAppState extends State<BulbaApp> {
     );
     return RepaintBoundary(
       key: _shotKey,
-      child: MaterialApp(
-        title: 'bulba music',
-        debugShowCheckedModeBanner: false,
-        theme: _theme(Palette.light, Brightness.light),
-        darkTheme: _theme(Palette.inkNight, Brightness.dark),
-        themeMode: switch (_themeName) {
-          'light' => ThemeMode.light,
-          'dark' => ThemeMode.dark,
-          _ => ThemeMode.system,
-        },
-        home: Shell(api: api, player: player),
+      child: ValueListenableBuilder<ThemeMode>(
+        valueListenable: themeMode,
+        builder: (context, mode, _) => MaterialApp(
+          title: 'bulba music',
+          debugShowCheckedModeBanner: false,
+          theme: _theme(Palette.light, Brightness.light),
+          darkTheme: _theme(Palette.inkNight, Brightness.dark),
+          themeMode: mode,
+          home: Shell(api: api, player: player, themeMode: themeMode),
+        ),
       ),
     );
   }
