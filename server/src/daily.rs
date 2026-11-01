@@ -172,6 +172,8 @@ pub fn taste_vector(conn: &Connection) -> Result<Option<Vec<f32>>> {
                       WHEN 2 THEN -0.45
                       ELSE 0.0 END)
                 + 2.0 * (SELECT count(*) FROM track_like l WHERE l.track_id = e.track_id)
+                + min(1.5, 0.5 * (SELECT count(*) FROM play_event r
+                                   WHERE r.track_id = e.track_id AND r.event = 4))
                 AS weight
          FROM play_event pe
          JOIN embed e ON e.track_id = pe.track_id AND e.model = ?1

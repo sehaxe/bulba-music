@@ -98,12 +98,14 @@ async fn track_view_joins_artist_album_and_master() {
         .oneshot(Request::get("/api/tracks").body(Body::empty()).unwrap())
         .await
         .unwrap();
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
-    assert_eq!(json.len(), 1);
-    assert_eq!(json[0]["artist"], "Aphex Twin");
-    assert_eq!(json[0]["album"], "SAW 85-92");
-    assert_eq!(json[0]["codec"], "flac");
-    assert_eq!(json[0]["year"], 1992);
+    let tracks: Vec<serde_json::Value> =
+        serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    assert_eq!(tracks.len(), 1);
+    assert_eq!(tracks[0]["title"], "Xtal");
+    assert_eq!(tracks[0]["artist"], "Aphex Twin");
+    assert_eq!(tracks[0]["album"], "SAW 85-92");
+    assert_eq!(tracks[0]["codec"], "flac");
+    assert_eq!(tracks[0]["year"], 1992);
 }
 
 #[tokio::test]
@@ -148,8 +150,11 @@ async fn search_finds_track_and_ignores_fts_operators() {
         .oneshot(Request::get("/api/search?q=xtal").body(Body::empty()).unwrap())
         .await
         .unwrap();
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
-    assert_eq!(json.len(), 1);
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    let tracks = json["tracks"].as_array().unwrap();
+    assert_eq!(tracks.len(), 1);
+    assert_eq!(tracks[0]["title"], "Xtal");
+    assert_eq!(json["artists"].as_array().unwrap().len(), 1);
 
     let admin = fixture();
     let resp = router(admin.state)
@@ -265,16 +270,12 @@ async fn like_roundtrip_and_taste_signal() {
     assert_eq!(tracks.len(), 1);
     assert_eq!(tracks[0]["id"], fx.id);
 
-    // A like is also logged as an event so the taste model sees it.
+    // Liking must not fabricate a replay event: event 4 means "played again".
     let conn = fx.state.db.open().unwrap();
     let events: i64 = conn
-        .query_row(
-            "SELECT count(*) FROM play_event WHERE event=4 AND client_id='like'",
-            [],
-            |r| r.get(0),
-        )
+        .query_row("SELECT count(*) FROM play_event WHERE event=4", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(events, 1);
+    assert_eq!(events, 0);
 
     let resp = router(fx.state)
         .oneshot(

@@ -7,6 +7,7 @@ import '../design/components.dart';
 import '../design/tokens.dart';
 import '../player/controller.dart';
 import '../player/likes.dart';
+import '../widgets/track_menu.dart';
 import '../widgets/track_row.dart';
 import 'collection.dart';
 
@@ -268,6 +269,14 @@ class _SearchScreenState extends State<SearchScreen> {
               onTap: () =>
                   widget.player.play(results.tracks[i], queue: results.tracks),
               onRadio: () => widget.onRadio(results.tracks[i]),
+              onMenu: () => showTrackMenu(
+                context,
+                track: results.tracks[i],
+                api: widget.api,
+                player: widget.player,
+                likes: widget.likes,
+                onRadio: () => widget.onRadio(results.tracks[i]),
+              ),
               liked: widget.likes.contains(results.tracks[i].id),
               onLike: () => widget.likes.toggle(results.tracks[i]),
             ),

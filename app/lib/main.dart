@@ -9,6 +9,8 @@ import 'api/client.dart';
 import 'design/tokens.dart';
 import 'player/controller.dart';
 import 'player/likes.dart';
+import 'screens/onboarding.dart';
+import 'state/prefs.dart';
 import 'shell.dart';
 
 /// Set with `--dart-define=SHOT=/path.png` to dump the first frame to a file.
@@ -54,11 +56,30 @@ class _BulbaAppState extends State<BulbaApp> {
   );
   late final PlayerController player = PlayerController(api);
   late final LikesStore likes = LikesStore(api);
+  Prefs? _prefs;
+  bool _ready = false;
+  bool _onboarding = false;
 
   @override
   void initState() {
     super.initState();
+    _boot();
     if (_shotPath.isNotEmpty) _captureAfterFirstFrame();
+  }
+
+  Future<void> _boot() async {
+    final prefs = await Prefs.load();
+    themeMode.value = Prefs.modeFrom(prefs.themeMode);
+    player.setVolume(prefs.volume);
+    final skipOnboarding =
+        const bool.fromEnvironment('SHOT_ONBOARD') ||
+        Platform.environment['BULBA_SKIP_ONBOARDING'] == '1';
+    if (!mounted) return;
+    setState(() {
+      _prefs = prefs;
+      _onboarding = !prefs.onboardingSeen && !skipOnboarding;
+      _ready = true;
+    });
   }
 
   Future<void> _captureAfterFirstFrame() async {
@@ -117,12 +138,32 @@ class _BulbaAppState extends State<BulbaApp> {
           theme: _theme(Palette.light, Brightness.light),
           darkTheme: _theme(Palette.inkNight, Brightness.dark),
           themeMode: mode,
-          home: Shell(
-            api: api,
-            player: player,
-            likes: likes,
-            themeMode: themeMode,
-          ),
+          home: !_ready
+              ? const ColoredBox(color: Color(0xFF141210))
+              : _onboarding
+              ? Onboarding(
+                  api: api,
+                  initialTheme: themeMode.value,
+                  onTheme: (m) {
+                    themeMode.value = m;
+                    _prefs?.setThemeMode(switch (m) {
+                      ThemeMode.light => 'light',
+                      ThemeMode.system => 'system',
+                      _ => 'dark',
+                    });
+                  },
+                  onDone: () async {
+                    await _prefs?.setOnboardingSeen();
+                    setState(() => _onboarding = false);
+                  },
+                )
+              : Shell(
+                  api: api,
+                  player: player,
+                  likes: likes,
+                  prefs: _prefs!,
+                  themeMode: themeMode,
+                ),
         ),
       ),
     );

@@ -1,7 +1,12 @@
 pub mod api;
+pub mod auth;
 pub mod daily;
 pub mod db;
 pub mod features;
+pub mod index;
 pub mod range;
+pub mod normalize;
 pub mod scan;
 pub mod search;
+pub mod stats;
+pub mod words;

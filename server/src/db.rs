@@ -36,6 +36,35 @@ impl Db {
         let _ = conn.execute("ALTER TABLE track ADD COLUMN brightness REAL", []);
         let _ = conn.execute("ALTER TABLE track ADD COLUMN energy REAL", []);
         let _ = conn.execute("ALTER TABLE track ADD COLUMN mode REAL", []);
+
+        // Older databases described a user by a telegram login. The account is
+        // now a phrase, so the column goes away; ids are preserved because every
+        // like and play event points at them.
+        let has_legacy: bool = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('user') WHERE name='ts_login'",
+                [],
+                |r| r.get::<_, i64>(0).map(|n| n > 0),
+            )
+            .unwrap_or(false);
+        if has_legacy {
+            conn.execute_batch(
+                "PRAGMA foreign_keys=OFF;
+                 BEGIN;
+                 ALTER TABLE user RENAME TO user_legacy;
+                 CREATE TABLE user (
+                   id          INTEGER PRIMARY KEY,
+                   name        TEXT NOT NULL,
+                   phrase_hash TEXT UNIQUE,
+                   created_at  INTEGER NOT NULL
+                 );
+                 INSERT INTO user(id, name, phrase_hash, created_at)
+                   SELECT id, name, NULL, created_at FROM user_legacy;
+                 DROP TABLE user_legacy;
+                 COMMIT;
+                 PRAGMA foreign_keys=ON;",
+            )?;
+        }
         Ok(())
     }
 }
@@ -49,9 +78,15 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 
 CREATE TABLE IF NOT EXISTS user (
-  id         INTEGER PRIMARY KEY,
-  ts_login   TEXT NOT NULL UNIQUE,
-  name       TEXT NOT NULL,
+  id          INTEGER PRIMARY KEY,
+  name        TEXT NOT NULL,
+  phrase_hash TEXT UNIQUE,
+  created_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS session (
+  token      TEXT PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES user(id),
   created_at INTEGER NOT NULL
 );
 
@@ -137,6 +172,20 @@ CREATE TABLE IF NOT EXISTS track_like (
   track_id INTEGER NOT NULL REFERENCES track(id),
   ts       INTEGER NOT NULL,
   PRIMARY KEY (user_id, track_id)
+);
+
+CREATE TABLE IF NOT EXISTS album_like (
+  user_id  INTEGER NOT NULL REFERENCES user(id),
+  album_id INTEGER NOT NULL REFERENCES album(id),
+  ts       INTEGER NOT NULL,
+  PRIMARY KEY (user_id, album_id)
+);
+
+CREATE TABLE IF NOT EXISTS artist_like (
+  user_id   INTEGER NOT NULL REFERENCES user(id),
+  artist_id INTEGER NOT NULL REFERENCES artist(id),
+  ts        INTEGER NOT NULL,
+  PRIMARY KEY (user_id, artist_id)
 );
 
 CREATE TABLE IF NOT EXISTS playlist (
@@ -239,12 +288,7 @@ pub fn rev(conn: &Connection) -> Result<i64> {
 }
 
 pub fn default_user(conn: &Connection) -> Result<i64> {
-    conn.execute(
-        "INSERT INTO user(ts_login, name, created_at) VALUES('local', 'local', unixepoch())
-         ON CONFLICT(ts_login) DO NOTHING",
-        [],
-    )?;
-    Ok(conn.query_row("SELECT id FROM user WHERE ts_login='local'", [], |r| r.get(0))?)
+    crate::auth::local_user(conn)
 }
 
 /// Lowercase, collapse whitespace, strip punctuation that fragments artists in

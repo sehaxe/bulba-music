@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import '../design/components.dart';
 import '../design/tokens.dart';
 import '../player/controller.dart';
 import '../player/likes.dart';
+import '../widgets/queue_sheet.dart';
 import '../widgets/waveform.dart';
 
 class PlayerScreen extends StatelessWidget {
@@ -61,6 +63,7 @@ class PlayerScreen extends StatelessWidget {
                         _TopBar(
                           player: player,
                           api: api,
+                          likes: likes,
                           p: p,
                           track: t,
                           onRadio: onRadio,
@@ -231,15 +234,97 @@ class _RoomWash extends StatelessWidget {
             ),
           ),
         ),
+        // Slow drifting orbs in the cover's own colours. They live behind a
+        // gradient, stay under 12% opacity and are the only animated thing on
+        // this screen, so the cost stays where nobody notices it.
+        FutureBuilder<Color>(
+          future: AccentCache.of(url),
+          builder: (context, snap) =>
+              _Blobs(accent: snap.data ?? AccentCache.fallback, room: room),
+        ),
       ],
     );
   }
+}
+
+class _Blobs extends StatefulWidget {
+  const _Blobs({required this.accent, required this.room});
+  final Color accent;
+  final Color room;
+
+  @override
+  State<_Blobs> createState() => _BlobsState();
+}
+
+class _BlobsState extends State<_Blobs> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 34),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: RepaintBoundary(
+        child: AnimatedBuilder(
+          animation: _c,
+          builder: (context, _) => CustomPaint(
+            painter: _BlobPainter(
+              t: _c.value,
+              accent: widget.accent,
+              room: widget.room,
+            ),
+            size: Size.infinite,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BlobPainter extends CustomPainter {
+  _BlobPainter({required this.t, required this.accent, required this.room});
+  final double t;
+  final Color accent;
+  final Color room;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+    final shortest = size.shortestSide;
+    void orb(double phase, double cx, double cy, double radius, Color color) {
+      final a = (t + phase) * 2 * 3.1415926;
+      final center = Offset(
+        cx * size.width + math.sin(a) * size.width * 0.06,
+        cy * size.height + math.cos(a * 0.8) * size.height * 0.05,
+      );
+      final paint = Paint()
+        ..color = color.withValues(alpha: 0.10)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, shortest * 0.16);
+      canvas.drawCircle(center, radius * shortest, paint);
+    }
+
+    orb(0.0, 0.28, 0.22, 0.34, accent);
+    orb(0.37, 0.74, 0.36, 0.26, accent);
+    orb(0.63, 0.52, 0.78, 0.30, Color.lerp(accent, Colors.white, 0.35)!);
+  }
+
+  @override
+  bool shouldRepaint(_BlobPainter old) =>
+      old.t != t || old.accent != accent || old.room != room;
 }
 
 class _TopBar extends StatelessWidget {
   const _TopBar({
     required this.player,
     required this.api,
+    required this.likes,
     required this.p,
     required this.track,
     required this.onRadio,
@@ -247,6 +332,7 @@ class _TopBar extends StatelessWidget {
 
   final PlayerController player;
   final Api api;
+  final LikesStore likes;
   final Palette p;
   final Track track;
   final void Function(Track) onRadio;
@@ -265,7 +351,8 @@ class _TopBar extends StatelessWidget {
           const Spacer(),
           IconButton(
             icon: Icon(Icons.more_vert_rounded, color: p.onRoom),
-            onPressed: () => _openMenu(context, player, api, track, onRadio),
+            onPressed: () =>
+                _openMenu(context, player, api, likes, track, onRadio),
           ),
         ],
       ),
@@ -277,6 +364,7 @@ void _openMenu(
   BuildContext context,
   PlayerController player,
   Api api,
+  LikesStore likes,
   Track track,
   void Function(Track) onRadio,
 ) {
@@ -300,9 +388,14 @@ void _openMenu(
               onRadio(track);
             },
           ),
-          _MenuRow(icon: Icons.shuffle_rounded, label: 'shuffle queue'),
-          _MenuRow(icon: Icons.repeat_rounded, label: 'repeat'),
-          _MenuRow(icon: Icons.queue_music_rounded, label: 'open queue'),
+          _MenuRow(
+            icon: Icons.queue_music_rounded,
+            label: 'открыть очередь',
+            onTap: () {
+              Navigator.of(context).maybePop();
+              showQueue(context, player: player, api: api, likes: likes);
+            },
+          ),
           _MenuRow(
             icon: Icons.download_rounded,
             label: 'download · ${track.format}',
@@ -356,13 +449,19 @@ class _Controls extends StatelessWidget {
       future: AccentCache.of(url),
       builder: (context, snap) {
         final accent = snap.data ?? AccentCache.fallback;
+        // Equal flex on both sides keeps the play button at the exact centre;
+        // a plain centred Row drifts left as soon as the sides differ in width.
         return Row(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            IconButton(
-              iconSize: 30,
-              icon: Icon(Icons.skip_previous_rounded, color: p.onRoom),
-              onPressed: player.previous,
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: IconButton(
+                  iconSize: 30,
+                  icon: Icon(Icons.skip_previous_rounded, color: p.onRoom),
+                  onPressed: player.previous,
+                ),
+              ),
             ),
             const SizedBox(width: S.lg),
             GestureDetector(
@@ -392,25 +491,32 @@ class _Controls extends StatelessWidget {
               ),
             ),
             const SizedBox(width: S.lg),
-            IconButton(
-              iconSize: 30,
-              icon: Icon(Icons.skip_next_rounded, color: p.onRoom),
-              onPressed: player.next,
-            ),
-            const SizedBox(width: S.lg),
-            GestureDetector(
-              onTap: () => likes.toggle(track),
-              child: AnimatedScale(
-                scale: likes.contains(track.id) ? 1.0 : 0.9,
-                duration: const Duration(milliseconds: 160),
-                curve: Curves.easeOut,
-                child: Icon(
-                  likes.contains(track.id)
-                      ? Icons.favorite_rounded
-                      : Icons.favorite_border_rounded,
-                  size: 24,
-                  color: likes.contains(track.id) ? accent : p.onRoomMute,
-                ),
+            Expanded(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.start,
+                children: [
+                  IconButton(
+                    iconSize: 30,
+                    icon: Icon(Icons.skip_next_rounded, color: p.onRoom),
+                    onPressed: player.next,
+                  ),
+                  const SizedBox(width: S.lg),
+                  GestureDetector(
+                    onTap: () => likes.toggle(track),
+                    child: AnimatedScale(
+                      scale: likes.contains(track.id) ? 1.0 : 0.9,
+                      duration: const Duration(milliseconds: 160),
+                      curve: Curves.easeOut,
+                      child: Icon(
+                        likes.contains(track.id)
+                            ? Icons.favorite_rounded
+                            : Icons.favorite_border_rounded,
+                        size: 24,
+                        color: likes.contains(track.id) ? accent : p.onRoomMute,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],

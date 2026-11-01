@@ -165,6 +165,7 @@ class HomeScreen extends StatefulWidget {
     required this.onRescan,
     required this.accent,
     required this.onOpen,
+    required this.onOpenAlbum,
   });
 
   final List<Track> tracks;
@@ -174,6 +175,7 @@ class HomeScreen extends StatefulWidget {
   final Future<void> Function() onRescan;
   final Color accent;
   final void Function(Collection) onOpen;
+  final void Function(int albumId) onOpenAlbum;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -342,6 +344,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   onPlay: () =>
                       widget.player.play(a.tracks.first, queue: a.tracks),
                   onRadio: () => widget.onRadio(a.tracks.first),
+                  onOpen: () => widget.onOpenAlbum(a.id),
                 ),
               );
             }, childCount: albums.length),

@@ -16,6 +16,7 @@ class TrackRow extends StatefulWidget {
     this.index,
     this.liked = false,
     this.onLike,
+    this.onMenu,
   });
 
   final Track track;
@@ -28,6 +29,9 @@ class TrackRow extends StatefulWidget {
   final bool liked;
   final VoidCallback? onLike;
 
+  /// Opens the shared track sheet (details, play next, radio, like).
+  final VoidCallback? onMenu;
+
   @override
   State<TrackRow> createState() => _TrackRowState();
 }
@@ -35,21 +39,12 @@ class TrackRow extends StatefulWidget {
 class _TrackRowState extends State<TrackRow> {
   bool _hover = false;
 
-  Future<void> _menu(BuildContext context, Offset at) async {
-    final overlay =
-        Overlay.of(context).context.findRenderObject() as RenderBox?;
-    if (overlay == null) return;
-    final chosen = await showMenu<String>(
-      context: context,
-      position: RelativeRect.fromRect(
-        at & const Size(1, 1),
-        Offset.zero & overlay.size,
-      ),
-      items: const [
-        PopupMenuItem(value: 'radio', child: Text('радио от этого трека')),
-      ],
-    );
-    if (chosen == 'radio') widget.onRadio?.call();
+  void _menu() {
+    if (widget.onMenu != null) {
+      widget.onMenu!();
+    } else if (widget.onRadio != null) {
+      widget.onRadio!();
+    }
   }
 
   @override
@@ -63,10 +58,10 @@ class _TrackRowState extends State<TrackRow> {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: widget.onTap,
-        onLongPress: widget.onRadio,
-        onSecondaryTapDown: widget.onRadio == null
+        onLongPress: (widget.onMenu ?? widget.onRadio) == null ? null : _menu,
+        onSecondaryTapDown: (widget.onMenu ?? widget.onRadio) == null
             ? null
-            : (d) => _menu(context, d.globalPosition),
+            : (_) => _menu(),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 90),
           curve: Curves.easeOut,

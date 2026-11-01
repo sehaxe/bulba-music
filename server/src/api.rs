@@ -36,8 +36,24 @@ pub fn router(state: AppState) -> Router {
         .route("/api/likes", get(list_likes))
         .route("/api/likes/ids", get(like_ids))
         .route("/api/likes/{id}", post(add_like).delete(remove_like))
+        .route("/api/artists", get(list_artists))
+        .route("/api/artists/{id}", get(get_artist))
+        .route("/api/albums", get(list_albums))
+        .route("/api/albums/{id}", get(get_album))
+        .route("/api/likes/albums", get(list_album_likes))
+        .route("/api/likes/albums/ids", get(album_like_ids))
+        .route("/api/likes/albums/{id}", post(add_album_like).delete(remove_album_like))
+        .route("/api/likes/artists", get(list_artist_likes))
+        .route("/api/likes/artists/ids", get(artist_like_ids))
+        .route("/api/likes/artists/{id}", post(add_artist_like).delete(remove_artist_like))
         .route("/api/manifest", get(manifest))
         .route("/api/events", post(record_events))
+        .route("/api/stats", get(stats))
+        .route("/api/info", get(info))
+        .route("/api/auth/register", post(register))
+        .route("/api/auth/login", post(login))
+        .route("/api/auth/me", get(whoami))
+        .route("/api/library/normalize", post(normalize_names))
         .with_state(state)
 }
 
@@ -53,6 +69,12 @@ impl ApiError {
     }
     fn internal(e: impl std::fmt::Display) -> Self {
         Self(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    }
+    fn unauthorized(message: &str) -> Self {
+        Self(StatusCode::UNAUTHORIZED, message.to_string())
+    }
+    fn bad_request(message: &str) -> Self {
+        Self(StatusCode::BAD_REQUEST, message.to_string())
     }
 }
 
@@ -221,6 +243,332 @@ async fn get_track(
 }
 
 #[derive(Debug, Deserialize)]
+struct LimitQuery {
+    limit: Option<i64>,
+}
+
+async fn list_artists(
+    State(st): State<AppState>,
+    Query(q): Query<LimitQuery>,
+) -> Result<Json<Vec<crate::index::ArtistSummary>>, ApiError> {
+    let db = st.db.clone();
+    let limit = q.limit.unwrap_or(5000).clamp(1, 20_000);
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let conn = db.open()?;
+        crate::index::artists(&conn, limit)
+    })
+    .await??;
+    Ok(Json(out))
+}
+
+async fn get_artist(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<crate::index::ArtistPage>, ApiError> {
+    let db = st.db.clone();
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let conn = db.open()?;
+        crate::index::artist(&conn, id)
+    })
+    .await??;
+    out.map(Json).ok_or_else(|| ApiError::not_found("artist"))
+}
+
+async fn list_albums(
+    State(st): State<AppState>,
+    Query(q): Query<LimitQuery>,
+) -> Result<Json<Vec<crate::index::AlbumSummary>>, ApiError> {
+    let db = st.db.clone();
+    let limit = q.limit.unwrap_or(5000).clamp(1, 20_000);
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let conn = db.open()?;
+        crate::index::albums(&conn, limit)
+    })
+    .await??;
+    Ok(Json(out))
+}
+
+async fn get_album(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<crate::index::AlbumPage>, ApiError> {
+    let db = st.db.clone();
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let conn = db.open()?;
+        crate::index::album(&conn, id)
+    })
+    .await??;
+    out.map(Json).ok_or_else(|| ApiError::not_found("album"))
+}
+
+async fn list_album_likes(State(st): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<crate::index::AlbumSummary>> {
+        let conn = db.open()?;
+        let user = crate::db::default_user(&conn)?;
+        let mut stmt = conn.prepare(
+            "SELECT a.id, a.title, ar.name, a.artist_id, a.year,
+                    (SELECT count(*) FROM track t WHERE t.album_id=a.id),
+                    coalesce((SELECT count(*) FROM play_event pe JOIN track t ON t.id=pe.track_id
+                              WHERE t.album_id=a.id AND pe.event=0),0),
+                    CASE WHEN a.cover_path IS NULL THEN 0 ELSE 1 END,
+                    1, a.disc_total
+             FROM album_like l JOIN album a ON a.id=l.album_id
+             JOIN artist ar ON ar.id=a.artist_id
+             WHERE l.user_id=?1 ORDER BY l.ts DESC",
+        )?;
+        let rows = stmt.query_map([user], |r| {
+            Ok(crate::index::AlbumSummary {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                artist: r.get(2)?,
+                artist_id: r.get(3)?,
+                year: r.get(4)?,
+                tracks: r.get(5)?,
+                plays: r.get(6)?,
+                has_cover: r.get(7)?,
+                liked: r.get(8)?,
+                disc_total: r.get(9)?,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    })
+    .await??;
+    Ok(Json(json!(out)))
+}
+
+async fn album_like_ids(State(st): State<AppState>) -> Result<Json<Vec<i64>>, ApiError> {
+    let db = st.db.clone();
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<i64>> {
+        let conn = db.open()?;
+        let user = crate::db::default_user(&conn)?;
+        let mut stmt = conn.prepare("SELECT album_id FROM album_like WHERE user_id=?1")?;
+        Ok(stmt.query_map([user], |r| r.get(0))?.filter_map(|r| r.ok()).collect())
+    })
+    .await??;
+    Ok(Json(out))
+}
+
+async fn add_album_like(
+    State(st): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let conn = db.open()?;
+        let user = user_from(&headers, &conn)?;
+        let exists: i64 =
+            conn.query_row("SELECT count(*) FROM album WHERE id=?1", [id], |r| r.get(0))?;
+        if exists == 0 {
+            return Ok(false);
+        }
+        conn.execute(
+            "INSERT INTO album_like(user_id,album_id,ts) VALUES(?1,?2,unixepoch())
+             ON CONFLICT(user_id,album_id) DO NOTHING",
+            rusqlite::params![user, id],
+        )?;
+        Ok(true)
+    })
+    .await??
+    .then_some(())
+    .ok_or_else(|| ApiError::not_found("album"))?;
+    Ok(Json(json!({"liked": true})))
+}
+
+async fn remove_album_like(
+    State(st): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let conn = db.open()?;
+        let user = user_from(&headers, &conn)?;
+        conn.execute(
+            "DELETE FROM album_like WHERE user_id=?1 AND album_id=?2",
+            rusqlite::params![user, id],
+        )?;
+        Ok(())
+    })
+    .await??;
+    Ok(Json(json!({"liked": false})))
+}
+
+async fn list_artist_likes(
+    State(st): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<Vec<crate::index::ArtistSummary>>, ApiError> {
+    let db = st.db.clone();
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<crate::index::ArtistSummary>> {
+        let conn = db.open()?;
+        let user = user_from(&headers, &conn)?;
+        let list = crate::index::artists(&conn, 20_000)?;
+        let mut liked = Vec::new();
+        for mut a in list {
+            let is: i64 = conn.query_row(
+                "SELECT count(*) FROM artist_like WHERE user_id=?1 AND artist_id=?2",
+                rusqlite::params![user, a.id],
+                |r| r.get(0),
+            )?;
+            if is > 0 {
+                a.liked = 1;
+                liked.push(a);
+            }
+        }
+        Ok(liked)
+    })
+    .await??;
+    Ok(Json(out))
+}
+
+async fn artist_like_ids(State(st): State<AppState>) -> Result<Json<Vec<i64>>, ApiError> {
+    let db = st.db.clone();
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<i64>> {
+        let conn = db.open()?;
+        let user = crate::db::default_user(&conn)?;
+        let mut stmt = conn.prepare("SELECT artist_id FROM artist_like WHERE user_id=?1")?;
+        Ok(stmt.query_map([user], |r| r.get(0))?.filter_map(|r| r.ok()).collect())
+    })
+    .await??;
+    Ok(Json(out))
+}
+
+async fn add_artist_like(
+    State(st): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let conn = db.open()?;
+        let user = user_from(&headers, &conn)?;
+        let exists: i64 =
+            conn.query_row("SELECT count(*) FROM artist WHERE id=?1", [id], |r| r.get(0))?;
+        if exists == 0 {
+            return Ok(false);
+        }
+        conn.execute(
+            "INSERT INTO artist_like(user_id,artist_id,ts) VALUES(?1,?2,unixepoch())
+             ON CONFLICT(user_id,artist_id) DO NOTHING",
+            rusqlite::params![user, id],
+        )?;
+        Ok(true)
+    })
+    .await??
+    .then_some(())
+    .ok_or_else(|| ApiError::not_found("artist"))?;
+    Ok(Json(json!({"liked": true})))
+}
+
+async fn remove_artist_like(
+    State(st): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let conn = db.open()?;
+        let user = user_from(&headers, &conn)?;
+        conn.execute(
+            "DELETE FROM artist_like WHERE user_id=?1 AND artist_id=?2",
+            rusqlite::params![user, id],
+        )?;
+        Ok(())
+    })
+    .await??;
+    Ok(Json(json!({"liked": false})))
+}
+
+#[derive(Debug, Deserialize)]
+struct NormalizeQuery {
+    #[serde(default)]
+    apply: bool,
+    limit: Option<usize>,
+}
+
+async fn normalize_names(
+    State(st): State<AppState>,
+    Query(q): Query<NormalizeQuery>,
+) -> Result<Json<crate::normalize::Report>, ApiError> {
+    let db = st.db.clone();
+    let libraries = st.libraries.clone();
+    let limit = q.limit.unwrap_or(usize::MAX);
+    let report = tokio::task::spawn_blocking(move || -> anyhow::Result<crate::normalize::Report> {
+        let conn = db.open()?;
+        if q.apply {
+            crate::normalize::apply(&conn, &libraries, limit)
+        } else {
+            crate::normalize::plan(&conn, &libraries)
+        }
+    })
+    .await??;
+    Ok(Json(report))
+}
+
+#[derive(Debug, Deserialize)]
+struct StatsQuery {
+    period: Option<String>,
+    year: Option<i64>,
+    month: Option<i64>,
+}
+
+async fn stats(
+    State(st): State<AppState>,
+    Query(q): Query<StatsQuery>,
+) -> Result<Json<crate::stats::Stats>, ApiError> {
+    let period = q.period.unwrap_or_else(|| "all".into());
+    let db = st.db.clone();
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<crate::stats::Stats> {
+        let conn = db.open()?;
+        crate::stats::collect(&conn, &period, q.year, q.month)
+    })
+    .await??;
+    Ok(Json(out))
+}
+
+async fn info(State(st): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    let libraries: Vec<String> = st
+        .libraries
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
+    let data = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+        let conn = db.open()?;
+        let tracks: i64 = conn.query_row("SELECT count(*) FROM track", [], |r| r.get(0))?;
+        let albums: i64 = conn.query_row("SELECT count(*) FROM album", [], |r| r.get(0))?;
+        let artists: i64 = conn.query_row("SELECT count(*) FROM artist", [], |r| r.get(0))?;
+        let bytes: i64 = conn.query_row("SELECT coalesce(sum(bytes),0) FROM master", [], |r| r.get(0))?;
+        let embedded: i64 =
+            conn.query_row("SELECT count(*) FROM embed WHERE model=?1", [crate::features::MODEL], |r| r.get(0))?;
+        let lossless: i64 = conn.query_row(
+            "SELECT count(*) FROM v_track WHERE codec IN ('flac','alac','wav','aiff')",
+            [],
+            |r| r.get(0),
+        )?;
+        let rev = crate::db::rev(&conn)?;
+        Ok(json!({
+            "tracks": tracks,
+            "albums": albums,
+            "artists": artists,
+            "bytes": bytes,
+            "lossless": lossless,
+            "embedded": embedded,
+            "rev": rev,
+        }))
+    })
+    .await??;
+
+    Ok(Json(json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "libraries": libraries,
+        "stats": data,
+        "features_model": crate::features::MODEL,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
 struct SearchQuery {
     q: String,
     limit: Option<i64>,
@@ -312,7 +660,7 @@ async fn record_events(
         Ok(match &login {
             None => Some(default_user(&conn)?),
             Some(l) => conn
-                .query_row("SELECT id FROM user WHERE ts_login=?1", [l], |r| r.get(0))
+                .query_row("SELECT id FROM user WHERE name=?1", [l], |r| r.get(0))
                 .ok(),
         })
     })
@@ -648,15 +996,83 @@ async fn daily_mixes(State(st): State<AppState>) -> Result<Json<Vec<Mix>>, ApiEr
     Ok(Json(mixes))
 }
 
-fn current_user(conn: &rusqlite::Connection) -> anyhow::Result<i64> {
-    crate::db::default_user(conn)
+/// The bearer token, if any, decides who is asking. Without one the request
+/// belongs to the local user, so a single machine never has to log in.
+fn user_from(headers: &axum::http::HeaderMap, conn: &rusqlite::Connection) -> anyhow::Result<i64> {
+    if let Some(value) = headers.get(axum::http::header::AUTHORIZATION) {
+        if let Ok(text) = value.to_str() {
+            if let Some(token) = text.strip_prefix("Bearer ") {
+                if let Some(id) = crate::auth::user_for_token(conn, token.trim())? {
+                    return Ok(id);
+                }
+            }
+        }
+    }
+    crate::auth::local_user(conn)
+}
+
+#[derive(Debug, Deserialize)]
+struct RegisterBody {
+    name: Option<String>,
+}
+
+async fn register(
+    State(st): State<AppState>,
+    Json(body): Json<RegisterBody>,
+) -> Result<Json<crate::auth::Session>, ApiError> {
+    let db = st.db.clone();
+    let session = tokio::task::spawn_blocking(move || -> anyhow::Result<crate::auth::Session> {
+        let conn = db.open()?;
+        crate::auth::register(&conn, body.name.as_deref().unwrap_or(""))
+    })
+    .await??;
+    Ok(Json(session))
+}
+
+#[derive(Debug, Deserialize)]
+struct LoginBody {
+    phrase: String,
+}
+
+async fn login(
+    State(st): State<AppState>,
+    Json(body): Json<LoginBody>,
+) -> Result<Json<crate::auth::Session>, ApiError> {
+    let db = st.db.clone();
+    let phrase = body.phrase.clone();
+    let session = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<crate::auth::Session>> {
+        let conn = db.open()?;
+        crate::auth::login(&conn, &phrase)
+    })
+    .await?;
+
+    match session {
+        Ok(Some(s)) => Ok(Json(s)),
+        Ok(None) => Err(ApiError::unauthorized("фраза не подходит")),
+        Err(e) => Err(ApiError::bad_request(&e.to_string())),
+    }
+}
+
+async fn whoami(
+    State(st): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<(i64, String)> {
+        let conn = db.open()?;
+        let id = user_from(&headers, &conn)?;
+        let name: String = conn.query_row("SELECT name FROM user WHERE id=?1", [id], |r| r.get(0))?;
+        Ok((id, name))
+    })
+    .await??;
+    Ok(Json(json!({"user_id": out.0, "name": out.1})))
 }
 
 async fn list_likes(State(st): State<AppState>) -> Result<Json<Vec<Track>>, ApiError> {
     let db = st.db.clone();
     let tracks = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Track>> {
         let conn = db.open()?;
-        let user = current_user(&conn)?;
+        let user = crate::db::default_user(&conn)?;
         let mut stmt = conn.prepare(&format!(
             "SELECT {TRACK_COLUMNS} FROM v_track t
              JOIN track_like l ON l.track_id = t.id
@@ -674,7 +1090,7 @@ async fn like_ids(State(st): State<AppState>) -> Result<Json<Vec<i64>>, ApiError
     let db = st.db.clone();
     let ids = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<i64>> {
         let conn = db.open()?;
-        let user = current_user(&conn)?;
+        let user = crate::db::default_user(&conn)?;
         let mut stmt = conn.prepare("SELECT track_id FROM track_like WHERE user_id = ?1")?;
         let rows = stmt.query_map([user], |r| r.get(0))?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -685,12 +1101,13 @@ async fn like_ids(State(st): State<AppState>) -> Result<Json<Vec<i64>>, ApiError
 
 async fn add_like(
     State(st): State<AppState>,
+    headers: axum::http::HeaderMap,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let db = st.db.clone();
     let ok = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
         let conn = db.open()?;
-        let user = current_user(&conn)?;
+        let user = user_from(&headers, &conn)?;
         let exists: i64 = conn.query_row("SELECT count(*) FROM track WHERE id=?1", [id], |r| {
             r.get(0)
         })?;
@@ -702,19 +1119,8 @@ async fn add_like(
              ON CONFLICT(user_id, track_id) DO NOTHING",
             rusqlite::params![user, id],
         )?;
-        // A like is the strongest positive signal we get; log it as an event so
-        // the taste model sees it even if the track is never played again.
-        if let Some(track) = conn
-            .query_row("SELECT id FROM track WHERE id=?1", [id], |r| r.get::<_, i64>(0))
-            .ok()
-        {
-            conn.execute(
-                "INSERT INTO play_event(ts,user_id,track_id,session_id,event,position_ms,
-                    position_ratio,source,device,offline,quality,client_id)
-                 VALUES(unixepoch(),?1,?2,0,4,0,0,0,3,0,0,'like')",
-                rusqlite::params![user, track],
-            )?;
-        }
+        // The like table itself is the signal; event 4 is reserved for real
+        // replays, so liking must not fabricate one.
         Ok(true)
     })
     .await??;
@@ -726,12 +1132,13 @@ async fn add_like(
 
 async fn remove_like(
     State(st): State<AppState>,
+    headers: axum::http::HeaderMap,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let db = st.db.clone();
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         let conn = db.open()?;
-        let user = current_user(&conn)?;
+        let user = user_from(&headers, &conn)?;
         conn.execute(
             "DELETE FROM track_like WHERE user_id=?1 AND track_id=?2",
             rusqlite::params![user, id],

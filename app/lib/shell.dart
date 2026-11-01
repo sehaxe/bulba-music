@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'api/client.dart';
 import 'design/accent.dart';
@@ -8,15 +9,20 @@ import 'design/components.dart';
 import 'design/tokens.dart';
 import 'player/controller.dart';
 import 'player/likes.dart';
+import 'state/prefs.dart';
 import 'screens/collection.dart';
 import 'screens/home.dart';
 import 'screens/library.dart';
 import 'screens/player_screen.dart';
 import 'screens/liked.dart';
+import 'screens/album.dart';
+import 'screens/artist.dart';
+import 'screens/stats.dart';
 import 'screens/search.dart';
 import 'screens/settings.dart';
 import 'widgets/nav.dart';
 import 'widgets/player_bar.dart';
+import 'widgets/queue_sheet.dart';
 
 class Shell extends StatefulWidget {
   const Shell({
@@ -25,24 +31,62 @@ class Shell extends StatefulWidget {
     required this.player,
     required this.themeMode,
     required this.likes,
+    required this.prefs,
   });
   final Api api;
   final PlayerController player;
   final LikesStore likes;
+  final Prefs prefs;
   final ValueNotifier<ThemeMode> themeMode;
 
   @override
   State<Shell> createState() => _ShellState();
 }
 
+enum _PlaceKind { collection, artist, album }
+
+/// One entry on the navigation stack.
+class _Place {
+  _Place.of(this.collection)
+    : kind = _PlaceKind.collection,
+      artistId = null,
+      albumId = null;
+  _Place.artist(int id)
+    : kind = _PlaceKind.artist,
+      artistId = id,
+      albumId = null,
+      collection = null;
+  _Place.album(int id)
+    : kind = _PlaceKind.album,
+      artistId = null,
+      albumId = id,
+      collection = null;
+
+  final _PlaceKind kind;
+  final Collection? collection;
+  final int? artistId;
+  final int? albumId;
+}
+
 class _ShellState extends State<Shell> {
   List<Track> _tracks = const [];
   String? _error;
   bool _loading = true;
-  int _tab = 0;
+  int _tab = int.tryParse(Platform.environment['BULBA_TAB'] ?? '') ?? 0;
   Color _accent = C.signal;
   int? _accentTrack;
-  Collection? _collection;
+
+  /// A real stack: back always pops exactly one place, whatever mix of
+  /// collections, artists and albums the listener walked through.
+  final List<_Place> _stack = [
+    if (int.tryParse(Platform.environment['BULBA_ARTIST'] ?? '') != null)
+      _Place.artist(int.parse(Platform.environment['BULBA_ARTIST']!)),
+    if (int.tryParse(Platform.environment['BULBA_ALBUM'] ?? '') != null)
+      _Place.album(int.parse(Platform.environment['BULBA_ALBUM']!)),
+  ];
+  Collection? get _collection => _stack.isEmpty ? null : _stack.last.collection;
+  int? get _artistId => _stack.isEmpty ? null : _stack.last.artistId;
+  int? get _albumId => _stack.isEmpty ? null : _stack.last.albumId;
 
   @override
   void initState() {
@@ -58,6 +102,9 @@ class _ShellState extends State<Shell> {
     super.dispose();
   }
 
+  int? _lastTrackId;
+  bool _lastPlaying = false;
+
   void _onPlayer() {
     final t = widget.player.current;
     if (t != null && t.id != _accentTrack) {
@@ -67,7 +114,15 @@ class _ShellState extends State<Shell> {
         if (mounted) setState(() => _accent = c);
       });
     }
-    setState(() {});
+    // The player notifies on every position tick. Rebuilding the whole shell
+    // there repainted every screen dozens of times a second; only a new track
+    // or a play/pause actually changes what this layer shows.
+    final playing = widget.player.playing;
+    if (t?.id != _lastTrackId || playing != _lastPlaying) {
+      _lastTrackId = t?.id;
+      _lastPlaying = playing;
+      setState(() {});
+    }
   }
 
   Future<void> _load() async {
@@ -95,8 +150,8 @@ class _ShellState extends State<Shell> {
             if (url != null && !covers.contains(url)) covers.add(url);
             if (covers.length == 4) break;
           }
-          setState(
-            () => _collection = Collection(
+          _openCollection(
+            Collection(
               title: mix.title,
               subtitle: mix.note,
               tracks: mix.tracks,
@@ -117,6 +172,37 @@ class _ShellState extends State<Shell> {
         _loading = false;
       });
     }
+  }
+
+  void _openArtist(int id) => setState(() => _stack.add(_Place.artist(id)));
+
+  void _openAlbum(int id) => setState(() => _stack.add(_Place.album(id)));
+
+  void _openCollection(Collection c) =>
+      setState(() => _stack.add(_Place.of(c)));
+
+  void _back() {
+    if (_stack.isEmpty) return;
+    setState(() => _stack.removeLast());
+  }
+
+  Future<void> _openAlbumById(int albumId, String title, String artist) async {
+    try {
+      final tracks = await widget.api.albumTracks(albumId, title);
+      if (!mounted || tracks.isEmpty) return;
+      _openCollection(
+        Collection(title: title, subtitle: artist, tracks: tracks),
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _playStatTrack(StatTrack st) async {
+    try {
+      final track = await widget.api.track(st.id);
+      if (track == null || !mounted) return;
+      await widget.player.play(track, queue: [track]);
+      _openPlayer();
+    } catch (_) {}
   }
 
   Future<void> _rescan() async {
@@ -164,11 +250,76 @@ class _ShellState extends State<Shell> {
   }
 
   @override
+  /// True while a text field owns the keyboard. Shortcuts are checked before
+  /// the focused widget sees the key, so without this guard typing a space in
+  /// search would pause the track instead of entering a space.
+  bool _typing() {
+    final focus = FocusManager.instance.primaryFocus?.context;
+    if (focus == null) return false;
+    var typing = false;
+    focus.visitAncestorElements((element) {
+      if (element.widget is EditableText) {
+        typing = true;
+        return false;
+      }
+      return true;
+    });
+    return typing;
+  }
+
   Widget build(BuildContext context) {
     final p = Palette.of(context);
     final size = MediaQuery.sizeOf(context);
     final wide = size.width >= 900;
 
+    void guard(VoidCallback action) {
+      if (_typing()) return;
+      action();
+    }
+
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.space): () =>
+            guard(widget.player.toggle),
+        const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
+            guard(() => widget.player.skipBy(const Duration(seconds: 5))),
+        const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
+            guard(() => widget.player.skipBy(const Duration(seconds: -5))),
+        const SingleActivator(LogicalKeyboardKey.arrowRight, shift: true): () =>
+            guard(() => widget.player.skipBy(const Duration(seconds: 30))),
+        const SingleActivator(LogicalKeyboardKey.arrowLeft, shift: true): () =>
+            guard(() => widget.player.skipBy(const Duration(seconds: -30))),
+        const SingleActivator(LogicalKeyboardKey.arrowUp): () =>
+            guard(() => widget.player.setVolume(widget.player.volume + 0.05)),
+        const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
+            guard(() => widget.player.setVolume(widget.player.volume - 0.05)),
+        const SingleActivator(LogicalKeyboardKey.keyN): () =>
+            guard(widget.player.next),
+        const SingleActivator(LogicalKeyboardKey.keyP): () =>
+            guard(widget.player.previous),
+        const SingleActivator(LogicalKeyboardKey.keyL): () => guard(() {
+          final t = widget.player.current;
+          if (t != null) widget.likes.toggle(t);
+        }),
+        const SingleActivator(LogicalKeyboardKey.keyQ): () => guard(() {
+          if (widget.player.queue.isEmpty) return;
+          showQueue(
+            context,
+            player: widget.player,
+            api: widget.api,
+            likes: widget.likes,
+          );
+        }),
+        const SingleActivator(LogicalKeyboardKey.keyF): () =>
+            guard(_openPlayer),
+        const SingleActivator(LogicalKeyboardKey.slash): () =>
+            guard(() => setState(() => _tab = 1)),
+      },
+      child: Focus(autofocus: true, child: _scaffold(p, wide)),
+    );
+  }
+
+  Widget _scaffold(Palette p, bool wide) {
     final body = Column(
       children: [
         if (_error != null && !_loading)
@@ -186,7 +337,6 @@ class _ShellState extends State<Shell> {
         Expanded(child: _screen()),
       ],
     );
-
     return Scaffold(
       backgroundColor: p.canvas,
       body: SafeArea(
@@ -213,6 +363,7 @@ class _ShellState extends State<Shell> {
               PlayerBar(
                 player: widget.player,
                 api: widget.api,
+                likes: widget.likes,
                 onOpen: _openPlayer,
                 accent: _accent,
                 height: wide ? 68 : 60,
@@ -228,7 +379,7 @@ class _ShellState extends State<Shell> {
 
   void _select(int i) => setState(() {
     _tab = i;
-    _collection = null;
+    _stack.clear();
   });
 
   Widget _screen() {
@@ -273,13 +424,35 @@ class _ShellState extends State<Shell> {
       );
     }
     final collection = _collection;
+    if (_artistId != null) {
+      return ArtistScreen(
+        api: widget.api,
+        player: widget.player,
+        likes: widget.likes,
+        artistId: _artistId!,
+        onAlbum: _openAlbum,
+        onRadio: _startRadio,
+        onBack: _back,
+      );
+    }
+    if (_albumId != null) {
+      return AlbumScreen(
+        api: widget.api,
+        player: widget.player,
+        likes: widget.likes,
+        albumId: _albumId!,
+        onArtist: _openArtist,
+        onRadio: _startRadio,
+        onBack: _back,
+      );
+    }
     if (collection != null) {
       return CollectionView(
         collection: collection,
         api: widget.api,
         player: widget.player,
         onRadio: _startRadio,
-        onBack: () => setState(() => _collection = null),
+        onBack: _back,
         likes: widget.likes,
         accent: _accent,
       );
@@ -293,14 +466,15 @@ class _ShellState extends State<Shell> {
           onRadio: _startRadio,
           onRescan: _rescan,
           accent: _accent,
-          onOpen: (collection) => setState(() => _collection = collection),
+          onOpen: _openCollection,
+          onOpenAlbum: _openAlbum,
         );
       case 1:
         return SearchScreen(
           api: widget.api,
           player: widget.player,
           onRadio: _startRadio,
-          onOpen: (collection) => setState(() => _collection = collection),
+          onOpen: _openCollection,
           likes: widget.likes,
         );
       case 2:
@@ -308,6 +482,9 @@ class _ShellState extends State<Shell> {
           tracks: _tracks,
           api: widget.api,
           player: widget.player,
+          likes: widget.likes,
+          onArtist: _openArtist,
+          onAlbum: _openAlbum,
           onRadio: _startRadio,
         );
       case 3:
@@ -316,17 +493,25 @@ class _ShellState extends State<Shell> {
           player: widget.player,
           likes: widget.likes,
           onRadio: _startRadio,
-          onOpenCollection: (tracks, title) => setState(
-            () => _collection = Collection(
+          onOpenCollection: (tracks, title) => _openCollection(
+            Collection(
               title: title,
               subtitle: '${tracks.length} треков',
               tracks: tracks,
             ),
           ),
         );
+      case 4:
+        return StatsScreen(
+          api: widget.api,
+          onOpenAlbum: _openAlbumById,
+          onPlayTrack: _playStatTrack,
+        );
       default:
         return SettingsScreen(
           api: widget.api,
+          player: widget.player,
+          prefs: widget.prefs,
           themeMode: widget.themeMode,
           onRescan: _rescan,
         );

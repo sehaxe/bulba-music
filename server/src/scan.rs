@@ -1,5 +1,5 @@
 use crate::db::{norm, Db};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use lofty::prelude::*;
 use rusqlite::{params, Transaction};
 use serde::Serialize;
@@ -304,13 +304,17 @@ pub fn scan(db: &Db, root: &Path, ignores: &[String]) -> Result<ScanReport> {
         };
 
         let artist_name = props.artist.clone().unwrap_or_else(|| "Unknown Artist".into());
-        let artist = artist_id(&tx, &artist_name)?;
+        let artist = artist_id(&tx, &artist_name)
+            .with_context(|| format!("artist '{artist_name}' for {}", path_str))?;
         let album_title = props
             .album
             .clone()
             .filter(|a| !is_junk(a))
             .unwrap_or_else(|| "Unknown Album".into());
-        let album = album_id(&tx, &album_title, artist, &norm(&artist_name), props.year)?;
+        let album = album_id(&tx, &album_title, artist, &norm(&artist_name), props.year)
+            .with_context(|| {
+                format!("album '{album_title}' artist_id {artist} for {}", path_str)
+            })?;
 
         // The first embedded picture wins; an album never loses its art on rescan.
         if let Some((bytes, mime)) = &props.cover {
@@ -329,7 +333,8 @@ pub fn scan(db: &Db, root: &Path, ignores: &[String]) -> Result<ScanReport> {
                 }
             }
         }
-        let (track, created) = upsert_track(&tx, album, &props)?;
+        let (track, created) = upsert_track(&tx, album, &props)
+            .with_context(|| format!("upsert track for {}", path_str))?;
         touched_tracks.insert(track);
         if created {
             report.tracks_created += 1;
@@ -374,8 +379,11 @@ pub fn scan(db: &Db, root: &Path, ignores: &[String]) -> Result<ScanReport> {
     let gone_masters: Vec<i64> = {
         let mut stmt = tx.prepare("SELECT id, path FROM master")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+        // Only files under this root can be "gone" here. Without the scope
+        // check, scanning one library deleted every file of the others on every
+        // run — and took their play history with them.
         rows.filter_map(|r| r.ok())
-            .filter(|(_, p)| !seen.contains(p))
+            .filter(|(_, p)| Path::new(p).starts_with(root) && !seen.contains(p))
             .map(|(id, _)| id)
             .collect()
     };
@@ -394,8 +402,20 @@ pub fn scan(db: &Db, root: &Path, ignores: &[String]) -> Result<ScanReport> {
         rows.filter_map(|r| r.ok()).collect()
     };
     for id in &orphaned {
-        tx.execute("DELETE FROM track WHERE id=?1", [id])?;
+        // Rows that point at the track must go first, otherwise the foreign key
+        // refuses the delete and the whole scan rolls back.
+        for table in [
+            "daily_mix",
+            "peaks",
+            "embed",
+            "track_like",
+            "playlist_track",
+            "play_event",
+        ] {
+            tx.execute(&format!("DELETE FROM {table} WHERE track_id=?1"), [id])?;
+        }
         tx.execute("DELETE FROM track_fts WHERE rowid=?1", [id])?;
+        tx.execute("DELETE FROM track WHERE id=?1", [id])?;
         tx.execute("INSERT INTO tombstones(track_id, rev) VALUES(?1, ?2)", params![id, rev])?;
     }
 

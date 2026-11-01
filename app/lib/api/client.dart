@@ -148,6 +148,320 @@ class SearchResults {
   );
 }
 
+class StatsTotals {
+  const StatsTotals({
+    required this.plays,
+    required this.hours,
+    required this.tracks,
+    required this.artists,
+    required this.likes,
+    required this.skips,
+    required this.repeats,
+  });
+  final int plays;
+  final double hours;
+  final int tracks;
+  final int artists;
+  final int likes;
+  final int skips;
+  final int repeats;
+
+  factory StatsTotals.fromJson(Map<String, dynamic> j) => StatsTotals(
+    plays: (j['plays'] ?? 0) as int,
+    hours: ((j['hours'] ?? 0) as num).toDouble(),
+    tracks: (j['tracks'] ?? 0) as int,
+    artists: (j['artists'] ?? 0) as int,
+    likes: (j['likes'] ?? 0) as int,
+    skips: (j['skips'] ?? 0) as int,
+    repeats: (j['repeats'] ?? 0) as int,
+  );
+}
+
+class StatTrack {
+  const StatTrack({
+    required this.id,
+    required this.title,
+    required this.artist,
+    required this.albumId,
+    required this.hasCover,
+    required this.plays,
+    required this.repeats,
+    required this.hours,
+    this.album = '',
+  });
+  final int id;
+  final String title;
+  final String artist;
+  final String album;
+  final int albumId;
+  final bool hasCover;
+  final int plays;
+  final int repeats;
+  final double hours;
+
+  factory StatTrack.fromJson(Map<String, dynamic> j) => StatTrack(
+    id: j['id'] as int,
+    title: (j['title'] ?? '') as String,
+    artist: (j['artist'] ?? '') as String,
+    albumId: (j['album_id'] ?? 0) as int,
+    album: (j['album'] ?? '') as String,
+    hasCover: j['has_cover'] == true || j['has_cover'] == 1,
+    plays: (j['plays'] ?? 0) as int,
+    repeats: (j['repeats'] ?? 0) as int,
+    hours: ((j['hours'] ?? 0) as num).toDouble(),
+  );
+}
+
+class StatArtist {
+  const StatArtist({
+    required this.name,
+    required this.plays,
+    required this.tracks,
+  });
+  final String name;
+  final int plays;
+  final int tracks;
+
+  factory StatArtist.fromJson(Map<String, dynamic> j) => StatArtist(
+    name: (j['name'] ?? '') as String,
+    plays: (j['plays'] ?? 0) as int,
+    tracks: (j['tracks'] ?? 0) as int,
+  );
+}
+
+class StatAlbum {
+  const StatAlbum({
+    required this.id,
+    required this.title,
+    required this.artist,
+    required this.hasCover,
+    required this.plays,
+  });
+  final int id;
+  final String title;
+  final String artist;
+  final bool hasCover;
+  final int plays;
+
+  factory StatAlbum.fromJson(Map<String, dynamic> j) => StatAlbum(
+    id: j['id'] as int,
+    title: (j['title'] ?? '') as String,
+    artist: (j['artist'] ?? '') as String,
+    hasCover: j['has_cover'] == true || j['has_cover'] == 1,
+    plays: (j['plays'] ?? 0) as int,
+  );
+}
+
+class MonthBucket {
+  const MonthBucket({
+    required this.month,
+    required this.plays,
+    required this.hours,
+  });
+  final int month;
+  final int plays;
+  final double hours;
+
+  factory MonthBucket.fromJson(Map<String, dynamic> j) => MonthBucket(
+    month: (j['month'] ?? 0) as int,
+    plays: (j['plays'] ?? 0) as int,
+    hours: ((j['hours'] ?? 0) as num).toDouble(),
+  );
+}
+
+class Stats {
+  const Stats({
+    required this.label,
+    required this.period,
+    required this.totals,
+    required this.topTracks,
+    required this.topArtists,
+    required this.topAlbums,
+    required this.months,
+    required this.daysPlayed,
+    required this.longestStreak,
+    this.repeatTrack,
+    this.firstPlay,
+  });
+  final String label;
+  final String period;
+  final StatsTotals totals;
+  final List<StatTrack> topTracks;
+  final List<StatArtist> topArtists;
+  final List<StatAlbum> topAlbums;
+  final List<MonthBucket> months;
+  final int daysPlayed;
+  final int longestStreak;
+  final StatTrack? repeatTrack;
+  final int? firstPlay;
+
+  factory Stats.fromJson(Map<String, dynamic> j) => Stats(
+    label: (j['label'] ?? '') as String,
+    period: (j['period'] ?? '') as String,
+    totals: StatsTotals.fromJson(j['totals'] as Map<String, dynamic>),
+    topTracks: (j['top_tracks'] as List<dynamic>? ?? [])
+        .map((e) => StatTrack.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false),
+    topArtists: (j['top_artists'] as List<dynamic>? ?? [])
+        .map((e) => StatArtist.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false),
+    topAlbums: (j['top_albums'] as List<dynamic>? ?? [])
+        .map((e) => StatAlbum.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false),
+    months: (j['months'] as List<dynamic>? ?? [])
+        .map((e) => MonthBucket.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false),
+    daysPlayed: (j['days_played'] ?? 0) as int,
+    longestStreak: (j['longest_streak'] ?? 0) as int,
+    repeatTrack: j['repeat_track'] == null
+        ? null
+        : StatTrack.fromJson(j['repeat_track'] as Map<String, dynamic>),
+    firstPlay: j['first_play'] as int?,
+  );
+
+  bool get isEmpty => totals.plays == 0;
+}
+
+class ArtistSummary {
+  const ArtistSummary({
+    required this.id,
+    required this.name,
+    required this.albums,
+    required this.tracks,
+    required this.plays,
+    this.coverAlbum,
+    this.hasCover = false,
+    this.liked = false,
+  });
+  final int id;
+  final String name;
+  final int albums;
+  final int tracks;
+  final int plays;
+  final int? coverAlbum;
+  final bool hasCover;
+  final bool liked;
+
+  factory ArtistSummary.fromJson(Map<String, dynamic> j) => ArtistSummary(
+    id: j['id'] as int,
+    name: (j['name'] ?? '') as String,
+    albums: (j['albums'] ?? 0) as int,
+    tracks: (j['tracks'] ?? 0) as int,
+    plays: (j['plays'] ?? 0) as int,
+    coverAlbum: j['cover_album'] as int?,
+    hasCover: j['has_cover'] == true || j['has_cover'] == 1,
+    liked: j['liked'] == true || j['liked'] == 1,
+  );
+}
+
+class AlbumSummary {
+  const AlbumSummary({
+    required this.id,
+    required this.title,
+    required this.artist,
+    required this.artistId,
+    required this.tracks,
+    this.year,
+    this.plays = 0,
+    this.hasCover = false,
+    this.liked = false,
+  });
+  final int id;
+  final String title;
+  final String artist;
+  final int artistId;
+  final int tracks;
+  final int? year;
+  final int plays;
+  final bool hasCover;
+  final bool liked;
+
+  factory AlbumSummary.fromJson(Map<String, dynamic> j) => AlbumSummary(
+    id: j['id'] as int,
+    title: (j['title'] ?? '') as String,
+    artist: (j['artist'] ?? '') as String,
+    artistId: (j['artist_id'] ?? 0) as int,
+    tracks: (j['tracks'] ?? 0) as int,
+    year: j['year'] as int?,
+    plays: (j['plays'] ?? 0) as int,
+    hasCover: j['has_cover'] == true || j['has_cover'] == 1,
+    liked: j['liked'] == true || j['liked'] == 1,
+  );
+}
+
+class AlbumPage {
+  const AlbumPage({
+    required this.album,
+    required this.tracks,
+    required this.totalMs,
+    required this.plays,
+  });
+  final AlbumSummary album;
+  final List<Track> tracks;
+  final int totalMs;
+  final int plays;
+
+  factory AlbumPage.fromJson(Map<String, dynamic> j) {
+    final album = AlbumSummary.fromJson(j['album'] as Map<String, dynamic>);
+    final raw = (j['tracks'] as List<dynamic>? ?? []);
+    final tracks = <Track>[];
+    for (final e in raw) {
+      final m = e as Map<String, dynamic>;
+      tracks.add(
+        Track(
+          id: m['id'] as int,
+          title: (m['title'] ?? '') as String,
+          artist: album.artist,
+          album: album.title,
+          albumId: album.id,
+          hasCover: album.hasCover,
+          year: album.year,
+          disc: m['disc'] as int?,
+          trackNo: m['track_no'] as int?,
+          durationMs: m['duration_ms'] as int?,
+          codec: m['codec'] as String?,
+          bits: m['bits'] as int?,
+          sampleRate: m['sample_rate'] as int?,
+          bitrate: m['bitrate'] as int?,
+        ),
+      );
+    }
+    return AlbumPage(
+      album: album,
+      tracks: tracks,
+      totalMs: (j['total_ms'] ?? 0) as int,
+      plays: (j['plays'] ?? 0) as int,
+    );
+  }
+}
+
+class ArtistPage {
+  const ArtistPage({
+    required this.artist,
+    required this.albums,
+    required this.topTracks,
+    this.firstYear,
+    this.lastYear,
+  });
+  final ArtistSummary artist;
+  final List<AlbumSummary> albums;
+  final List<StatTrack> topTracks;
+  final int? firstYear;
+  final int? lastYear;
+
+  factory ArtistPage.fromJson(Map<String, dynamic> j) => ArtistPage(
+    artist: ArtistSummary.fromJson(j['artist'] as Map<String, dynamic>),
+    albums: (j['albums'] as List<dynamic>? ?? [])
+        .map((e) => AlbumSummary.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false),
+    topTracks: (j['top_tracks'] as List<dynamic>? ?? [])
+        .map((e) => StatTrack.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false),
+    firstYear: j['first_year'] as int?,
+    lastYear: j['last_year'] as int?,
+  );
+}
+
 class Mix {
   const Mix({
     required this.id,
@@ -254,6 +568,120 @@ class Api {
       throw ApiException('search → ${r.statusCode}');
     }
     return SearchResults.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  Future<Track?> track(int id) async {
+    final r = await _http
+        .get(Uri.parse('$base/api/tracks/$id'))
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) return null;
+    return Track.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  /// The server indexes tracks, not albums; an album's tracks are found by
+  /// searching its title and keeping the matching album id.
+  Future<List<Track>> albumTracks(int albumId, String title) async {
+    final hit = await search(title, limit: 200);
+    return hit.tracks
+        .where((t) => t.albumId == albumId)
+        .toList(growable: false);
+  }
+
+  Future<List<ArtistSummary>> artists() async {
+    final r = await _http
+        .get(Uri.parse('$base/api/artists?limit=20000'))
+        .timeout(const Duration(seconds: 30));
+    if (r.statusCode != 200) throw ApiException('artists → ${r.statusCode}');
+    return (jsonDecode(r.body) as List<dynamic>)
+        .map((e) => ArtistSummary.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false);
+  }
+
+  Future<ArtistPage> artistPage(int id) async {
+    final r = await _http
+        .get(Uri.parse('$base/api/artists/$id'))
+        .timeout(const Duration(seconds: 20));
+    if (r.statusCode != 200) throw ApiException('artist → ${r.statusCode}');
+    return ArtistPage.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  Future<List<AlbumSummary>> albums() async {
+    final r = await _http
+        .get(Uri.parse('$base/api/albums?limit=20000'))
+        .timeout(const Duration(seconds: 30));
+    if (r.statusCode != 200) throw ApiException('albums → ${r.statusCode}');
+    return (jsonDecode(r.body) as List<dynamic>)
+        .map((e) => AlbumSummary.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false);
+  }
+
+  Future<AlbumPage> albumPage(int id) async {
+    final r = await _http
+        .get(Uri.parse('$base/api/albums/$id'))
+        .timeout(const Duration(seconds: 20));
+    if (r.statusCode != 200) throw ApiException('album → ${r.statusCode}');
+    return AlbumPage.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  Future<List<int>> albumLikeIds() async {
+    final r = await _http
+        .get(Uri.parse('$base/api/likes/albums/ids'))
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200)
+      throw ApiException('album likes → ${r.statusCode}');
+    return (jsonDecode(r.body) as List<dynamic>).cast<int>();
+  }
+
+  Future<void> likeAlbum(int id, {bool on = true}) async {
+    final uri = Uri.parse('$base/api/likes/albums/$id');
+    final r = on
+        ? await _http.post(uri).timeout(const Duration(seconds: 15))
+        : await _http.delete(uri).timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) throw ApiException('album like → ${r.statusCode}');
+  }
+
+  Future<List<int>> artistLikeIds() async {
+    final r = await _http
+        .get(Uri.parse('$base/api/likes/artists/ids'))
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200)
+      throw ApiException('artist likes → ${r.statusCode}');
+    return (jsonDecode(r.body) as List<dynamic>).cast<int>();
+  }
+
+  Future<void> likeArtist(int id, {bool on = true}) async {
+    final uri = Uri.parse('$base/api/likes/artists/$id');
+    final r = on
+        ? await _http.post(uri).timeout(const Duration(seconds: 15))
+        : await _http.delete(uri).timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200)
+      throw ApiException('artist like → ${r.statusCode}');
+  }
+
+  Future<Map<String, dynamic>> normalize({bool apply = false}) async {
+    final r = await _http
+        .post(Uri.parse('$base/api/library/normalize?apply=$apply&limit=2000'))
+        .timeout(const Duration(minutes: 2));
+    if (r.statusCode != 200) {
+      throw ApiException('normalize → ${r.statusCode}');
+    }
+    return jsonDecode(r.body) as Map<String, dynamic>;
+  }
+
+  Future<Stats> stats({String period = 'all'}) async {
+    final r = await _http
+        .get(Uri.parse('$base/api/stats?period=$period'))
+        .timeout(const Duration(seconds: 20));
+    if (r.statusCode != 200) throw ApiException('stats → ${r.statusCode}');
+    return Stats.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  Future<Map<String, dynamic>> info() async {
+    final r = await _http
+        .get(Uri.parse('$base/api/info'))
+        .timeout(const Duration(seconds: 20));
+    if (r.statusCode != 200) throw ApiException('info → ${r.statusCode}');
+    return jsonDecode(r.body) as Map<String, dynamic>;
   }
 
   Future<List<Track>> likes() async {

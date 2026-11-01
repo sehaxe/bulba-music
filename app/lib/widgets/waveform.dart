@@ -89,8 +89,15 @@ class _TrackWaveformState extends State<TrackWaveform>
       playing: widget.player.playing,
       builder: (context) => LayoutBuilder(
         builder: (context, box) {
-          void seek(Offset local) =>
-              widget.player.seek((local.dx / box.maxWidth).clamp(0.0, 1.0));
+          // Measure against the real render box and convert the pointer, so a
+          // tap lands where the finger is no matter how the row is padded.
+          void seek(Offset global) {
+            final object = context.findRenderObject();
+            if (object is! RenderBox || object.size.width <= 0) return;
+            final local = object.globalToLocal(global);
+            widget.player.seek((local.dx / object.size.width).clamp(0.0, 1.0));
+          }
+
           return GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTapDown: (d) => seek(d.globalPosition),

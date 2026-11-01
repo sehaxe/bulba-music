@@ -16,6 +16,7 @@ const kNavItems = <NavItemData>[
   NavItemData(Icons.search_rounded, 'search'),
   NavItemData(Icons.grid_view_rounded, 'library'),
   NavItemData(Icons.favorite_rounded, 'liked'),
+  NavItemData(Icons.insights_rounded, 'stats'),
   NavItemData(Icons.tune_rounded, 'settings'),
 ];
 

@@ -523,13 +523,13 @@ class PillButton extends StatefulWidget {
     super.key,
     required this.icon,
     required this.label,
-    required this.onTap,
+    this.onTap,
     this.accent = C.signal,
   });
 
   final IconData icon;
   final String label;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final Color accent;
 
   @override

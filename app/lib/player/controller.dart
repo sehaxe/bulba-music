@@ -85,6 +85,17 @@ class PlayerController extends ChangeNotifier {
     int source = SignalLog.srcQueue,
   }) async {
     final previous = current;
+    if (previous != null && previous.id == track.id) {
+      // Pressing play on what is already loaded, or restarting a track from the
+      // list, is a deliberate repeat: the strongest signal of all after a like.
+      signals.add(
+        track,
+        event: SignalLog.repeated,
+        position: position,
+        length: _duration,
+        source: source,
+      );
+    }
     if (previous != null && previous.id != track.id) {
       // Leaving a track early is a skip only before it has been meaningfully
       // heard: under 20% or under 20 seconds.
@@ -160,6 +171,80 @@ class PlayerController extends ChangeNotifier {
   }
 
   Future<void> toggleMute() => setVolume(_volume == 0 ? 1 : 0);
+
+  /// Adds a track right after the current one. Radio and manual "play next"
+  /// both go through here so the queue never has two sources of truth.
+  void playNext(Track track) {
+    final at = _index < 0 ? _queue.length : _index + 1;
+    final next = [..._queue]..insert(at, track);
+    _queue = next;
+    notifyListeners();
+  }
+
+  void addToQueue(Track track) {
+    _queue = [..._queue, track];
+    notifyListeners();
+  }
+
+  void removeAt(int index) {
+    if (index < 0 || index >= _queue.length) return;
+    final removed = _queue[index];
+    final next = [..._queue]..removeAt(index);
+    _queue = next;
+    if (removed.id == current?.id) {
+      // Removing the playing track moves to whatever now sits in its place.
+      if (next.isNotEmpty) {
+        _index = index.clamp(0, next.length - 1);
+        _playWithoutHistory(next[_index]);
+      } else {
+        _index = -1;
+        current = null;
+        _player.stop();
+        notifyListeners();
+      }
+      return;
+    }
+    if (index < _index) _index -= 1;
+    notifyListeners();
+  }
+
+  void move(int from, int to) {
+    if (from == to || from < 0 || from >= _queue.length) return;
+    final next = [..._queue];
+    final track = next.removeAt(from);
+    next.insert(to.clamp(0, next.length), track);
+    final playing = current?.id;
+    _queue = next;
+    _index = playing == null ? -1 : next.indexWhere((t) => t.id == playing);
+    notifyListeners();
+  }
+
+  Future<void> jumpTo(int index) async {
+    if (index < 0 || index >= _queue.length) return;
+    await play(_queue[index], queue: _queue);
+  }
+
+  void _playWithoutHistory(Track track) {
+    current = track;
+    _position = Duration.zero;
+    _anchor = Duration.zero;
+    _anchorAt = DateTime.now();
+    _duration = track.duration;
+    notifyListeners();
+    _player.open(Media(api.stream(track.id).toString()));
+  }
+
+  /// Nudges the position by delta without leaving the track; used by the
+  /// keyboard shortcuts.
+  Future<void> skipBy(Duration delta) async {
+    final total = _duration.inMilliseconds;
+    if (total <= 0) return;
+    final target = (position.inMilliseconds + delta.inMilliseconds).clamp(
+      0,
+      total,
+    );
+    await _player.seek(Duration(milliseconds: target));
+  }
 
   Future<void> seek(double ratio) async {
     final total = _duration.inMilliseconds;
