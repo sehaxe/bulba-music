@@ -239,11 +239,14 @@ class _ShellState extends State<Shell> {
     if (widget.player.current == null) return;
     Navigator.of(context).push(
       PixelPageRoute<void>(
-        builder: (_) => PlayerScreen(
-          player: widget.player,
-          api: widget.api,
-          likes: widget.likes,
-          onRadio: _startRadio,
+        builder: (_) => AccentScope(
+          color: _accent,
+          child: PlayerScreen(
+            player: widget.player,
+            api: widget.api,
+            likes: widget.likes,
+            onRadio: _startRadio,
+          ),
         ),
       ),
     );
@@ -315,7 +318,10 @@ class _ShellState extends State<Shell> {
         const SingleActivator(LogicalKeyboardKey.slash): () =>
             guard(() => setState(() => _tab = 1)),
       },
-      child: Focus(autofocus: true, child: _scaffold(p, wide)),
+      child: AccentScope(
+        color: _accent,
+        child: Focus(autofocus: true, child: _scaffold(p, wide)),
+      ),
     );
   }
 

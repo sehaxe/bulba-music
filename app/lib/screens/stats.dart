@@ -184,7 +184,9 @@ class _StatsScreenState extends State<StatsScreen> {
                           builder: (context, v, _) => Container(
                             height: math.max(2, 104 * v),
                             decoration: BoxDecoration(
-                              color: m.plays == 0 ? p.hairline : C.signal,
+                              color: m.plays == 0
+                                  ? p.hairline
+                                  : AccentScope.of(context),
                               borderRadius: const BorderRadius.vertical(
                                 top: Radius.circular(2),
                               ),
@@ -426,7 +428,10 @@ class _RepeatCard extends StatelessWidget {
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text('${track.repeats}×', style: T.displayM(C.signal)),
+              Text(
+                '${track.repeats}×',
+                style: T.displayM(AccentScope.of(context)),
+              ),
               Text('повторов', style: T.micro(p.mute)),
             ],
           ),

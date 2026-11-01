@@ -27,16 +27,19 @@ class FloatingNav extends StatelessWidget {
     super.key,
     required this.index,
     required this.onSelect,
-    this.accent = C.signal,
+    this.accent,
   });
 
   final int index;
   final ValueChanged<int> onSelect;
-  final Color accent;
+
+  /// Null means "take the cover's colour from the tree".
+  final Color? accent;
 
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final accent = this.accent ?? AccentScope.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(S.lg, 0, S.lg, S.md),
       child: ClipRRect(
@@ -142,12 +145,14 @@ class NavRail extends StatelessWidget {
     super.key,
     required this.index,
     required this.onSelect,
-    this.accent = C.signal,
+    this.accent,
   });
 
   final int index;
   final ValueChanged<int> onSelect;
-  final Color accent;
+
+  /// Null means "take the cover's colour from the tree".
+  final Color? accent;
 
   @override
   Widget build(BuildContext context) {
@@ -211,12 +216,15 @@ class _RailItem extends StatelessWidget {
 
   final NavItemData item;
   final bool active;
-  final Color accent;
+
+  /// Null means "take the cover's colour from the tree".
+  final Color? accent;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final accent = this.accent ?? AccentScope.of(context);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: Material(

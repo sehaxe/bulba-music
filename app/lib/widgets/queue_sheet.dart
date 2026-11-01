@@ -191,7 +191,9 @@ class _QueueRow extends StatelessWidget {
                     track.title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: T.bodyStrong(playing ? C.signal : p.ink),
+                    style: T.bodyStrong(
+                      playing ? AccentScope.of(context) : p.ink,
+                    ),
                   ),
                   Text(
                     track.artist,
@@ -206,7 +208,7 @@ class _QueueRow extends StatelessWidget {
               icon: Icon(
                 liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
                 size: 16,
-                color: liked ? C.signal : p.ash,
+                color: liked ? AccentScope.of(context) : p.ash,
               ),
               onPressed: onLike,
             ),

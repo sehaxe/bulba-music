@@ -136,6 +136,18 @@ class _TrackWaveformState extends State<TrackWaveform>
   }
 }
 
+/// Exposed so a test can check the arithmetic without a canvas.
+class WaveBarGeometry {
+  const WaveBarGeometry(this.barW, this.gap);
+  final double barW;
+  final double gap;
+
+  static WaveBarGeometry of(int n, double width) {
+    final gap = (width / n) * 0.38;
+    return WaveBarGeometry(width / n - gap, gap);
+  }
+}
+
 class _WavePainter extends CustomPainter {
   _WavePainter({
     required this.peaks,
@@ -151,12 +163,17 @@ class _WavePainter extends CustomPainter {
   final Color base;
   final double reveal;
 
+  /// Bars and gaps that exactly fill [width] for [n] peaks.
+  ///
+  /// The old version clamped both to at least one pixel, so a 250 px box with
+  /// 400 peaks drew 800 px worth of bars and clipped half the track: the
+  /// visible waveform only covered the first half of the song, which is why a
+  /// click appeared to land to the right of the cursor.
   @override
   void paint(Canvas canvas, Size size) {
     final n = peaks.length;
     if (n == 0) return;
-    final gap = math.max(1.0, size.width / n * 0.38);
-    final barW = math.max(1.0, (size.width - gap * (n - 1)) / n);
+    final g = WaveBarGeometry.of(n, size.width);
     final mid = size.height / 2;
     final playedPaint = Paint()..color = accent;
     final restPaint = Paint()..color = base;
@@ -165,11 +182,12 @@ class _WavePainter extends CustomPainter {
       final v = (peaks[i] / 255.0).clamp(0.0, 1.0);
       // Half-height: the bar is mirrored around the centre, so the total is 2h.
       final h = math.max(1.0, v * (size.height / 2) * 0.92 * reveal);
-      final x = i * (barW + gap);
+      final x = i * (g.barW + g.gap);
       final played = (i + 0.5) / n <= progress;
+      final w = math.max(0.7, g.barW);
       final rrect = RRect.fromRectAndRadius(
-        Rect.fromLTWH(x, mid - h, barW, h * 2),
-        Radius.circular(barW / 2),
+        Rect.fromLTWH(x, mid - h, w, h * 2),
+        Radius.circular(w / 2),
       );
       canvas.drawRRect(rrect, played ? playedPaint : restPaint);
     }

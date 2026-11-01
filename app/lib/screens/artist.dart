@@ -287,12 +287,12 @@ class _LinkButtonState extends State<_LinkButton> {
               Icon(
                 _copied ? Icons.check_rounded : Icons.link_rounded,
                 size: 15,
-                color: _copied ? C.signal : p.mute,
+                color: _copied ? AccentScope.of(context) : p.mute,
               ),
               const SizedBox(width: 6),
               Text(
                 _copied ? 'скопировано' : 'ссылка',
-                style: T.label(_copied ? C.signal : p.mute),
+                style: T.label(_copied ? AccentScope.of(context) : p.mute),
               ),
             ],
           ),
@@ -343,14 +343,18 @@ class _Heart extends StatelessWidget {
         width: 36,
         height: 36,
         decoration: BoxDecoration(
-          color: liked ? C.signal.withValues(alpha: 0.15) : Colors.transparent,
-          border: Border.all(color: liked ? C.signal : p.hairline),
+          color: liked
+              ? AccentScope.of(context).withValues(alpha: 0.15)
+              : Colors.transparent,
+          border: Border.all(
+            color: liked ? AccentScope.of(context) : p.hairline,
+          ),
           shape: BoxShape.circle,
         ),
         child: Icon(
           liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
           size: 17,
-          color: liked ? C.signal : p.mute,
+          color: liked ? AccentScope.of(context) : p.mute,
         ),
       ),
     );

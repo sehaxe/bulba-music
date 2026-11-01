@@ -22,7 +22,28 @@ class _PendingSeek {
 /// reports its clock.
 class PlayerController extends ChangeNotifier {
   PlayerController(this.api) : signals = SignalLog(api) {
-    _player.stream.position.listen((p) {
+    _bind(_deckA);
+    _bind(_deckB);
+    _deckA.setVolume(100);
+    _deckB.setVolume(0);
+  }
+
+  /// Two decks, one output. Crossfade is not a special case in the UI: it is
+  /// this object opening the next track early on the idle deck and riding the
+  /// equal-power law between them.
+  final Player _deckA = Player();
+  final Player _deckB = Player();
+  late Player _active = _deckA;
+  Player get _idle => identical(_active, _deckA) ? _deckB : _deckA;
+
+  /// Seconds of overlap, 0 disables it.
+  int crossfade = 0;
+  Timer? _fade;
+  bool _fading = false;
+
+  void _bind(Player player) {
+    player.stream.position.listen((p) {
+      if (!identical(player, _active)) return;
       // A seek can land somewhere other than asked (some files carry wrong
       // duration headers). Correct once, quietly, instead of leaving the
       // listener far from where they tapped.
@@ -36,28 +57,31 @@ class PlayerController extends ChangeNotifier {
             corrections: pending.corrections + 1,
             nominal: pending.target,
           );
-          _player.seek(Duration(milliseconds: _pendingSeek!.target));
+          player.seek(Duration(milliseconds: _pendingSeek!.target));
         }
       }
       _position = p;
       _anchor = p;
       _anchorAt = DateTime.now();
       notifyListeners();
+      _maybeFade();
     });
-    _player.stream.duration.listen((d) {
+    player.stream.duration.listen((d) {
+      if (!identical(player, _active)) return;
       if (d > Duration.zero) {
         _duration = d;
         notifyListeners();
       }
     });
-    _player.stream.playing.listen((v) {
+    player.stream.playing.listen((v) {
+      if (!identical(player, _active)) return;
       _playing = v;
       _anchor = _position;
       _anchorAt = DateTime.now();
       notifyListeners();
     });
-    _player.stream.completed.listen((done) {
-      if (!done) return;
+    player.stream.completed.listen((done) {
+      if (!done || !identical(player, _active) || _fading) return;
       final t = current;
       if (t != null) {
         signals.add(
@@ -73,7 +97,6 @@ class PlayerController extends ChangeNotifier {
 
   final Api api;
   final SignalLog signals;
-  final Player _player = Player();
   Timer? _progress;
 
   Track? current;
@@ -171,7 +194,7 @@ class PlayerController extends ChangeNotifier {
         );
       }
     });
-    await _player.open(Media(api.stream(track.id).toString()));
+    await _active.open(Media(api.stream(track.id).toString()));
   }
 
   Future<void> next() async {
@@ -190,12 +213,13 @@ class PlayerController extends ChangeNotifier {
     await play(_queue[i], queue: _queue);
   }
 
-  void toggle() => _player.playOrPause();
+  void toggle() => _active.playOrPause();
 
   Future<void> setVolume(double v) async {
     _volume = v.clamp(0.0, 1.0);
     notifyListeners();
-    await _player.setVolume(_volume * 100);
+    if (_fading) return; // the fade owns both decks while it runs
+    await _active.setVolume(_volume * 100);
   }
 
   Future<void> toggleMute() => setVolume(_volume == 0 ? 1 : 0);
@@ -227,7 +251,7 @@ class PlayerController extends ChangeNotifier {
       } else {
         _index = -1;
         current = null;
-        _player.stop();
+        _active.stop();
         notifyListeners();
       }
       return;
@@ -259,7 +283,7 @@ class PlayerController extends ChangeNotifier {
     _anchorAt = DateTime.now();
     _duration = track.duration;
     notifyListeners();
-    _player.open(Media(api.stream(track.id).toString()));
+    _active.open(Media(api.stream(track.id).toString()));
   }
 
   /// Nudges the position by delta without leaving the track; used by the
@@ -271,7 +295,7 @@ class PlayerController extends ChangeNotifier {
       0,
       total,
     );
-    await _player.seek(Duration(milliseconds: target));
+    await _active.seek(Duration(milliseconds: target));
   }
 
   Future<void> seek(double ratio) async {
@@ -289,14 +313,99 @@ class PlayerController extends ChangeNotifier {
       nominal: target,
     );
     notifyListeners();
-    await _player.seek(Duration(milliseconds: target));
+    await _active.seek(Duration(milliseconds: target));
   }
+
+  /// Fires once per track, when the remaining time reaches the crossfade
+  /// length. Called from every position tick, so it has to be cheap and
+  /// idempotent.
+  void _maybeFade() {
+    if (crossfade <= 0 || _fading || !_playing) return;
+    final total = _duration.inMilliseconds;
+    if (total <= 0) return;
+    final left = total - _position.inMilliseconds;
+    if (left > crossfade * 1000) return;
+    if (left <= 0) return;
+    if (_fadeStartedFor == current?.id) return;
+    _fadeStartedFor = current?.id;
+    _beginFade();
+  }
+
+  int? _fadeStartedFor;
+
+  /// Starts the next track on the idle deck and rides an equal-power curve
+  /// between the two. Called from the position tick, once, when the remaining
+  /// time of the playing track reaches the crossfade length.
+  Future<void> _beginFade() async {
+    if (_fading || _queue.isEmpty || crossfade <= 0) return;
+    final nextIndex = (_index + 1) % _queue.length;
+    if (nextIndex == _index) return;
+    final incoming = _queue[nextIndex];
+    _fading = true;
+
+    debugPrint('[fade] start ${crossfade}s → ${incoming.title}');
+    final outgoing = _active;
+    final target = _idle;
+    await target.setVolume(0);
+    await target.open(Media(api.stream(incoming.id).toString()));
+
+    final total = Duration(seconds: crossfade);
+    final started = DateTime.now();
+    _fade?.cancel();
+    _fade = Timer.periodic(const Duration(milliseconds: 50), (timer) async {
+      final t =
+          (DateTime.now().difference(started).inMilliseconds /
+                  total.inMilliseconds)
+              .clamp(0.0, 1.0);
+      // cos/sin keep the summed power constant: a linear fade dips ~3 dB in
+      // the middle, which is audible as a hole in the mix.
+      final theta = t * 3.141592653589793 / 2;
+      await outgoing.setVolume(_volume * 100 * _cos(theta));
+      await target.setVolume(_volume * 100 * _sin(theta));
+      if (t >= 1.0) {
+        timer.cancel();
+        await outgoing.pause();
+        await outgoing.stop();
+        _active = target;
+        _idle.play();
+        _index = nextIndex;
+        current = incoming;
+        _fadeStartedFor = null;
+        _position = Duration.zero;
+        _anchor = Duration.zero;
+        _anchorAt = DateTime.now();
+        _duration = incoming.duration;
+        _playing = true;
+        _fading = false;
+        _pendingSeek = null;
+        debugPrint('[fade] done → ${incoming.title}');
+        notifyListeners();
+      }
+    });
+  }
+
+  static double _cos(double x) {
+    // Dart has no dart:math import here on purpose: the widget layer is kept
+    // free of extra imports, and this approximation is within 1e-14.
+    var term = 1.0, sum = 1.0, n = 0;
+    var xx = x * x;
+    while (term.abs() > 1e-14 && n < 12) {
+      term *= -xx / ((2 * n + 1) * (2 * n + 2));
+      sum += term;
+      n++;
+    }
+    return sum;
+  }
+
+  static double _sin(double x) => _cos(1.5707963267948966 - x);
 
   @override
   void dispose() {
+    _fade?.cancel();
     _progress?.cancel();
     signals.flush();
-    _player.dispose();
+    _deckA.dispose();
+    _deckB.dispose();
     super.dispose();
   }
 }

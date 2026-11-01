@@ -82,10 +82,29 @@ class Palette {
 }
 
 abstract final class C {
-  /// The cover's hue, used in exactly two places: played progress and the
-  /// currently playing marker.
+  /// Fallback before a cover is known, and the value used by widgets built
+  /// without an ancestor [AccentScope] (tests, dialogs opened from nowhere).
   static const signal = Color(0xFFC2410C);
   static const danger = Color(0xFFFF3B30);
+}
+
+/// The colour of the current cover, handed down the tree.
+///
+/// Everything that used to hardcode orange — progress, the playing marker,
+/// sliders, hearts, links, buttons — reads from here, so a track change moves
+/// the whole interface, not half of it.
+class AccentScope extends InheritedWidget {
+  const AccentScope({super.key, required this.color, required super.child});
+
+  final Color color;
+
+  static Color of(BuildContext context) {
+    final scope = context.dependOnInheritedWidgetOfExactType<AccentScope>();
+    return scope?.color ?? C.signal;
+  }
+
+  @override
+  bool updateShouldNotify(AccentScope old) => old.color != color;
 }
 
 abstract final class S {

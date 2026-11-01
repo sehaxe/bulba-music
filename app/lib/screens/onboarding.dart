@@ -121,7 +121,9 @@ class _OnboardingState extends State<Onboarding> {
                       height: 6,
                       margin: const EdgeInsets.only(right: 6),
                       decoration: BoxDecoration(
-                        color: i == _page ? C.signal : p.hairlineStrong,
+                        color: i == _page
+                            ? AccentScope.of(context)
+                            : p.hairlineStrong,
                         borderRadius: BorderRadius.circular(3),
                       ),
                     ),
@@ -228,7 +230,7 @@ class _Bullet extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: S.sm),
       child: Row(
         children: [
-          Icon(icon, size: 18, color: C.signal),
+          Icon(icon, size: 18, color: AccentScope.of(context)),
           const SizedBox(width: S.sm),
           Text(text, style: T.body(p.ink)),
         ],
@@ -344,7 +346,9 @@ class _Look extends StatelessWidget {
                     decoration: BoxDecoration(
                       color: theme == mode ? p.card : Colors.transparent,
                       border: Border.all(
-                        color: theme == mode ? C.signal : p.hairline,
+                        color: theme == mode
+                            ? AccentScope.of(context)
+                            : p.hairline,
                         width: theme == mode ? 1.4 : 1,
                       ),
                       borderRadius: BorderRadius.circular(14),
@@ -355,7 +359,9 @@ class _Look extends StatelessWidget {
                         Icon(
                           icon,
                           size: 22,
-                          color: theme == mode ? C.signal : p.mute,
+                          color: theme == mode
+                              ? AccentScope.of(context)
+                              : p.mute,
                         ),
                         const SizedBox(height: S.md),
                         Text(label, style: T.bodyStrong(p.ink)),

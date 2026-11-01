@@ -187,7 +187,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                         child: TextField(
                           controller: _query,
                           onChanged: (v) => setState(() => _q = v),
-                          cursorColor: C.signal,
+                          cursorColor: AccentScope.of(context),
                           style: T.body(p.ink),
                           decoration: InputDecoration(
                             isDense: true,
@@ -257,7 +257,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                   ),
                                   child: Text(
                                     letter,
-                                    style: T.heading(C.signal),
+                                    style: T.heading(AccentScope.of(context)),
                                   ),
                                 ),
                               _row(context, item, i),
@@ -462,7 +462,7 @@ class _IndexRowState extends State<_IndexRow> {
                 ),
               ),
               if (widget.badge != null)
-                Icon(widget.badge, size: 15, color: C.signal),
+                Icon(widget.badge, size: 15, color: AccentScope.of(context)),
               const SizedBox(width: S.md),
               Icon(Icons.chevron_right_rounded, size: 18, color: p.ash),
             ],

@@ -240,7 +240,10 @@ void _showDetails(BuildContext context, Track t, Api api) {
                 alignment: Alignment.centerRight,
                 child: TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: Text('закрыть', style: T.label(C.signal)),
+                  child: Text(
+                    'закрыть',
+                    style: T.label(AccentScope.of(context)),
+                  ),
                 ),
               ),
             ],
@@ -310,7 +313,7 @@ class _ItemState extends State<_Item> {
               Icon(
                 widget.icon,
                 size: 18,
-                color: widget.accent ? C.signal : p.onRoomMute,
+                color: widget.accent ? AccentScope.of(context) : p.onRoomMute,
               ),
               const SizedBox(width: S.md),
               Text(widget.label, style: T.body(p.onRoom)),

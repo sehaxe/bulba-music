@@ -140,7 +140,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             controller: controller,
             autofocus: true,
             maxLines: 3,
-            cursorColor: C.signal,
+            cursorColor: AccentScope.of(context),
             style: T.body(p.ink),
             decoration: InputDecoration(
               hintText: 'двенадцать слов через пробел',
@@ -154,7 +154,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             TextButton(
               onPressed: () => Navigator.of(context).pop(controller.text),
-              child: Text('войти', style: T.label(C.signal)),
+              child: Text('войти', style: T.label(AccentScope.of(context))),
             ),
           ],
         );
@@ -357,13 +357,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   : '${widget.prefs.crossfade} с',
               onChanged: (v) {
                 widget.prefs.setCrossfade(v.round());
+                widget.player.crossfade = v.round();
                 setState(() {});
               },
             ),
             const SizedBox(height: S.xs),
             Text(
-              'кроссфейд сохраняется и включится вместе с двухдечным движком; '
-              'сейчас треки стыкуются без паузы.',
+              'Два плеера: следующий трек стартует заранее на втором, громкость '
+              'идёт по равномощной кривой cos/sin — на середине не проваливается '
+              'на 3 дБ, как у линейного кроссфейда.',
               style: T.micro(p.ash),
             ),
             const SizedBox(height: S.sm),
@@ -471,7 +473,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: TextField(
                     controller: _serverController,
                     style: T.body(p.body),
-                    cursorColor: C.signal,
+                    cursorColor: AccentScope.of(context),
                     decoration: InputDecoration(
                       isDense: true,
                       hintText: 'http://100.x.y.z:8422',
@@ -625,10 +627,10 @@ class _SliderRow extends StatelessWidget {
                 trackHeight: 3,
                 thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
                 overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
-                activeTrackColor: C.signal,
+                activeTrackColor: AccentScope.of(context),
                 inactiveTrackColor: p.hairlineStrong,
-                thumbColor: C.signal,
-                overlayColor: C.signal.withValues(alpha: 0.12),
+                thumbColor: AccentScope.of(context),
+                overlayColor: AccentScope.of(context).withValues(alpha: 0.12),
               ),
               child: Slider(
                 value: value.clamp(0, max),

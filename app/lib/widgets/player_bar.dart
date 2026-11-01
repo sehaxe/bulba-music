@@ -16,22 +16,25 @@ class PlayerBar extends StatelessWidget {
     required this.api,
     required this.likes,
     required this.onOpen,
-    this.accent = C.signal,
+    this.accent,
     this.height = 64,
     this.showVolume = false,
   });
 
   final PlayerController player;
+
+  /// Null means the cover's colour is resolved from the tree.
   final Api api;
   final LikesStore likes;
   final VoidCallback onOpen;
-  final Color accent;
+  final Color? accent;
   final double height;
   final bool showVolume;
 
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final accent = this.accent ?? AccentScope.of(context);
     final t = player.current;
     if (t == null) return const SizedBox.shrink();
     return GestureDetector(
@@ -294,14 +297,14 @@ class _CircleButton extends StatefulWidget {
     required this.onTap,
     this.size = 40,
     this.filled = false,
-    this.accent = C.signal,
+    this.accent,
   });
 
+  final Color? accent;
   final IconData icon;
   final VoidCallback? onTap;
   final double size;
   final bool filled;
-  final Color accent;
 
   @override
   State<_CircleButton> createState() => _CircleButtonState();

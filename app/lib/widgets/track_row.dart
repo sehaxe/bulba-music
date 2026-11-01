@@ -79,7 +79,9 @@ class _TrackRowState extends State<TrackRow> {
                   child: Text(
                     widget.playing ? '▸' : '${widget.index}',
                     textAlign: TextAlign.right,
-                    style: T.caption(widget.playing ? C.signal : p.ash),
+                    style: T.caption(
+                      widget.playing ? AccentScope.of(context) : p.ash,
+                    ),
                   ),
                 ),
                 const SizedBox(width: S.md),
@@ -97,7 +99,9 @@ class _TrackRowState extends State<TrackRow> {
                       t.title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: T.bodyStrong(widget.playing ? C.signal : p.ink),
+                      style: T.bodyStrong(
+                        widget.playing ? AccentScope.of(context) : p.ink,
+                      ),
                     ),
                     Text(
                       widget.showCover ? t.artist : '${t.artist} · ${t.album}',
@@ -144,7 +148,7 @@ class _TrackRowState extends State<TrackRow> {
                             : Icons.favorite_border_rounded,
                         size: 17,
                         color: widget.liked
-                            ? C.signal
+                            ? AccentScope.of(context)
                             : (_hover ? p.mute : Colors.transparent),
                       ),
                     ),

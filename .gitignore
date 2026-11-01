@@ -31,3 +31,7 @@ incoming/
 
 # the music itself lives here, but never in git
 /library/
+
+# build artefacts
+/dist/
+/app/build/

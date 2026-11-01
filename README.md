@@ -1,47 +1,105 @@
+<div align="center">
+
+<img src="https://raw.githubusercontent.com/sehaxe/bulba-music/main/app/assets/icon.png" width="120" alt="">
+
 # bulba music
 
-Self-hosted music: the library lives on the server, the phone is a thin client
-over Tailscale, and the recommendations are computed from what you actually
-play — no catalogue, no cloud, no account on someone else's machine.
+**Своя музыка. Свой сервер. Свои рекомендации.**
 
-## Layout
+Не облако с чужой библиотекой, а замена Spotify, которую ты держишь у себя:
+FLAC-мастера на диске, телефон как тонкий клиент по Tailscale, и подборки,
+посчитанные из того, что ты правда слушаешь.
+
+</div>
+
+<img src="docs/screenshots/hero.png" alt="Плеер и главная">
+
+---
+
+## Что внутри
+
+| | |
+|---|---|
+| **Библиотека** | FLAC навсегда мастером. Формат виден в каждой строке: `[flac]`, `[320]`, `[aac]`. Lossy никогда не перекодируется в lossy. |
+| **Индекс** | Артисты и альбомы по буквам, рейка справа с теми буквами, что реально есть. Страница артиста: альбомы по годам и то, что ты правда переслушиваешь. |
+| **Плеер** | Волна в обе стороны от центра, перемотка тапом, кроссфейд на двух деках по равномощной кривой, gapless. |
+| **Цвет** | Обложка — единственный источник акцента: палитра вынимается из арта и переходит на весь интерфейс за 420 мс. |
+| **Рекомендации** | Эмбеддинги из звука, четыре оси (темп, яркость, громкость, мажор/минор), дневные подборки по настроению, вкус как центроид из прослушиваний, скипов и лайков. |
+| **Аккаунты** | Двенадцать слов вместо пароля. Те же слова на телефоне — один слушатель с общей историей. В базе только хеш. |
+| **Ссылки** | `/a/8`, `/al/9` — серверные страницы, открываются в браузере телефона. |
+
+<img src="docs/screenshots/grid.png" alt="Библиотека, артист, альбом">
+
+---
+
+## Архитектура
 
 ```
-server/    Rust: axum + SQLite, scanning, features, recommendations, pages
-app/       Flutter: Linux/macOS/Android client
-library/   the music itself — Artist/Album (Year)/NN - Title.ext, gitignored
+┌────────────┐   Tailscale    ┌──────────────────────────────┐
+│ телефон    │───────────────▶│  server (Rust)               │
+│ Flutter    │  HTTP + Range  │  axum · SQLite · FTS5        │
+└────────────┘                │  scan · tags · features      │
+                              │  recs · server pages         │
+┌────────────┐                └──────────────┬───────────────┘
+│ десктоп    │───────────────────────────────┘
+│ Flutter    │                library/  Artist/Album (Year)/NN - Title.flac
+└────────────┘
 ```
 
-`library/` is never committed. It is the one thing worth backing up.
+- **Сервер владеет диском.** Сканирует библиотеку при старте и каждые 5 минут.
+  Клиент не знает, что такое папка.
+- **Один код клиента** на Android, Linux и macOS (Flutter + media_kit).
+- **Один бинарь сервера**, SQLite в WAL, без внешних сервисов.
 
-## Run
+## Быстрый старт
 
 ```sh
-cd server && cargo run --release              # http://0.0.0.0:8422
-cd app && flutter run -d linux                # or: flutter build apk
+git clone https://github.com/sehaxe/bulba-music
+cd bulba-music
+
+# сервер
+cd server && cargo run --release -- --library ~/bulba-music/library
+
+# клиент
+cd ../app && flutter run -d linux
 ```
 
-The server scans `library/` on start and every five minutes. Clients never scan
-a disk; they ask the server.
+Библиотека — просто папка `library/` рядом с проектом (в git её нет).
+Телефон: `docs/phone.md`, там Tailscale, APK и вход по фразе.
 
-Overrides: `--library <path>` (repeatable), `--port`, `--db`, `BULBA_LIBRARY`,
-`BULBA_SERVER` for the client.
+## Скачать
 
-## What is inside
+Готовые сборки — в [releases](https://github.com/sehaxe/bulba-music/releases):
 
-- **Library**: tags, covers, FLAC-master first, per-track format shown honestly.
-- **Index**: artists and albums grouped by letter with a rail; artist pages with
-  albums in release order and what you actually replay; album pages in disc order.
-- **Recommendations**: embeddings from the audio, four axes (tempo, brightness,
-  library-relative loudness, major/minor), daily mixes per mood, novelty capped
-  per list, taste as a weighted centroid of plays, skips, repeats and likes.
-- **Accounts**: twelve words, wallet style; the same phrase on two devices is one
-  listener. Only the hash is stored.
-- **Links**: `/a/<artist>`, `/al/<album>` — server-rendered, open from a phone.
+- **Android** — `bulba-music-0.0.1-arm64.apk`
+- **Linux** — `bulba-music-0.0.1-linux-x64.tar.gz`
 
-## Tests
+## Как считаются рекомендации
+
+1. **Кандидаты** — kNN по эмбеддингу текущего трека и по центроидам вкуса.
+2. **Скоринг** — косинус к сиду, к вкусу, знакомство с артистом, новизна,
+   совпадение по темпу, штраф за недавний скип.
+3. **Диверсификация** — не больше двух треков на артиста, без сыгранного за
+   семь дней.
+4. **Разнообразие** — MMR: релевантность минус повтор, с долей исследования.
+5. **Арка** — порядок по энергии, а не «набор треков».
+
+Вкус обновляется от прослушиваний, скипов раньше 20 % и лайков. Скип весит
+больше лайка: поведение честнее, чем кнопка.
+
+## Тесты
 
 ```sh
-cd server && cargo test      # 60+ tests, no network
-cd app && flutter test
+cd server && cargo test      # 60+ тестов, без сети
+cd app   && flutter test     # геометрия волны, перемотка, кроссфейд
 ```
+
+## Статус
+
+0.0.1 — играет, качает, листает, считает подборки. В планах: скачивание
+офлайн на телефон, синхронная лирика, стемы (вокал поверх инструментала),
+серверный A/B рекомендаций.
+
+## Лицензия
+
+MIT
