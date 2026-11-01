@@ -63,6 +63,9 @@ fn fixture() -> Fixture {
     Fixture {
         _dir: dir,
         state: AppState {
+            cache: bulba_music_server::derive::Cache::new(
+                std::path::PathBuf::from("/tmp/bulba-test-derived"),
+            ),
             db,
             libraries: vec![std::path::PathBuf::from("/nonexistent")],
             ignores: vec![],

@@ -610,7 +610,12 @@ class Api {
     return jsonDecode(r.body) as Map<String, dynamic>;
   }
 
-  Uri stream(int id) => Uri.parse('$base/api/tracks/$id/stream');
+  /// The master by default; `quality` asks the server for a derived Opus copy
+  /// (opus96 / opus128 / opus160) instead.
+  Uri stream(int id, {String? quality}) {
+    final q = (quality == null || quality == 'flac') ? '' : '?quality=$quality';
+    return Uri.parse('$base/api/tracks/$id/stream$q');
+  }
 
   Future<void> postEvents(List<Map<String, dynamic>> events) async {
     if (events.isEmpty) return;

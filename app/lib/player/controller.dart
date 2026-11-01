@@ -38,6 +38,10 @@ class PlayerController extends ChangeNotifier {
 
   /// Seconds of overlap, 0 disables it.
   int crossfade = 0;
+
+  /// 'flac' streams the master; opus96/128/160 ask the server for a smaller
+  /// copy, which is what a phone on mobile data should use.
+  String quality = 'flac';
   Timer? _fade;
   bool _fading = false;
 
@@ -194,7 +198,9 @@ class PlayerController extends ChangeNotifier {
         );
       }
     });
-    await _active.open(Media(api.stream(track.id).toString()));
+    await _active.open(
+      Media(api.stream(track.id, quality: quality).toString()),
+    );
   }
 
   Future<void> next() async {
@@ -283,7 +289,7 @@ class PlayerController extends ChangeNotifier {
     _anchorAt = DateTime.now();
     _duration = track.duration;
     notifyListeners();
-    _active.open(Media(api.stream(track.id).toString()));
+    _active.open(Media(api.stream(track.id, quality: quality).toString()));
   }
 
   /// Nudges the position by delta without leaving the track; used by the
@@ -347,7 +353,9 @@ class PlayerController extends ChangeNotifier {
     final outgoing = _active;
     final target = _idle;
     await target.setVolume(0);
-    await target.open(Media(api.stream(incoming.id).toString()));
+    await target.open(
+      Media(api.stream(incoming.id, quality: quality).toString()),
+    );
 
     final total = Duration(seconds: crossfade);
     final started = DateTime.now();

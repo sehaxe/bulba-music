@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub struct AppState {
+    pub cache: crate::derive::Cache,
     pub db: Db,
     pub libraries: Vec<PathBuf>,
     pub ignores: Vec<String>,
@@ -891,6 +892,7 @@ async fn info(
         "libraries": libraries,
         "stats": data,
         "features_model": crate::features::MODEL,
+        "derived_bytes": st.cache.size(),
     })))
 }
 
@@ -1704,9 +1706,20 @@ fn compute_peaks(path: &str) -> anyhow::Result<Vec<u8>> {
     Ok(peaks)
 }
 
+#[derive(Debug, Deserialize)]
+struct CoverQuery {
+    /// Pixel width; defaults to 512, which is more than any list needs.
+    w: Option<u32>,
+    /// webp (default) or jpeg/png for clients that ask.
+    fmt: Option<String>,
+    /// `orig` serves the stored file untouched.
+    size: Option<String>,
+}
+
 async fn cover(
     State(st): State<AppState>,
     Path(id): Path<i64>,
+    Query(q): Query<CoverQuery>,
 ) -> Result<Response, ApiError> {
     let path = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<String>> {
         let conn = st.db.open()?;
@@ -1719,6 +1732,34 @@ async fn cover(
     })
     .await??;
     let path = path.ok_or_else(|| ApiError::not_found("cover"))?;
+
+    // Covers are the biggest thing a list downloads, so they are served scaled
+    // and re-encoded once, then from cache. `size=orig` keeps the old path for
+    // anything that needs the full picture.
+    if q.size.as_deref() != Some("orig") {
+        let width = q.w.unwrap_or(512).clamp(64, 2048);
+        let fmt = q.fmt.unwrap_or_else(|| "webp".to_string());
+        let cache = st.cache.clone();
+        let source = std::path::PathBuf::from(&path);
+        let derived = tokio::task::spawn_blocking(move || cache.cover(&source, width, &fmt))
+            .await?
+            .map_err(|e| ApiError::internal(format!("{e:#}")))?;
+        let bytes = tokio::fs::read(&derived)
+            .await
+            .map_err(|_| ApiError::not_found("cover"))?;
+        let mime = match derived.extension().and_then(|e| e.to_str()) {
+            Some("webp") => "image/webp",
+            Some("jpg") => "image/jpeg",
+            _ => "image/png",
+        };
+        return Response::builder()
+            .header(header::CONTENT_TYPE, mime)
+            .header(header::CONTENT_LENGTH, bytes.len())
+            .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+            .body(axum::body::Body::from(bytes))
+            .map_err(|e| ApiError::internal(e.to_string()));
+    }
+
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|_| ApiError::not_found("cover"))?;
@@ -1744,9 +1785,16 @@ fn mime_for(codec: &str) -> &'static str {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct StreamQuery {
+    /// "flac" (default, the master) or opus96/opus128/opus160.
+    quality: Option<String>,
+}
+
 async fn stream(
     State(st): State<AppState>,
     Path(id): Path<i64>,
+    Query(q): Query<StreamQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let found = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<(String, String)>> {
@@ -1766,7 +1814,29 @@ async fn stream(
     .await??;
     let (path, codec) = found.ok_or_else(|| ApiError::not_found("track"))?;
 
-    let file = tokio::fs::File::open(&path)
+    // A phone on a metered connection asks for Opus; the master never changes.
+    let (path, codec) = match q.quality.as_deref().and_then(crate::derive::Quality::parse) {
+        Some(quality) => {
+            let cache = st.cache.clone();
+            let source = std::path::PathBuf::from(&path);
+            let mtime = std::fs::metadata(&source)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let derived = tokio::task::spawn_blocking(move || {
+                cache.opus(&source, mtime, quality)
+            })
+            .await?
+            .map_err(ApiError::internal)?;
+            (derived.to_string_lossy().to_string(), "opus".to_string())
+        }
+        None => (path, codec),
+    };
+    let path = path.as_str();
+
+    let file = tokio::fs::File::open(path)
         .await
         .map_err(|_| ApiError::not_found("file"))?;
     let len = file.metadata().await.map_err(|_| ApiError::not_found("file"))?.len();

@@ -344,7 +344,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
             style: T.micro(p.ash),
           ),
           const SizedBox(height: S.lg),
-          _Row(label: 'поток', value: 'flac с сервера · opus по требованию'),
+          Text('поток', style: T.caption(p.mute)),
+          const SizedBox(height: S.sm),
+          Wrap(
+            spacing: S.sm,
+            runSpacing: S.sm,
+            children: [
+              for (final entry in const [
+                ('flac', 'flac · мастер'),
+                ('opus160', 'opus 160'),
+                ('opus128', 'opus 128'),
+                ('opus96', 'opus 96'),
+              ])
+                _Choice(
+                  label: entry.$2,
+                  selected: widget.prefs.quality == entry.$1,
+                  onTap: () {
+                    widget.prefs.setQuality(entry.$1);
+                    widget.player.quality = entry.$1;
+                    setState(() {});
+                  },
+                ),
+            ],
+          ),
+          const SizedBox(height: S.sm),
+          Text(
+            'Opus готовится сервером один раз и кэшируется: 128k — это ~3 МБ на '
+            'трек вместо 28 МБ FLAC, на телефонной сети разница в десять раз. '
+            'Мастер при этом не трогается.',
+            style: T.micro(p.ash),
+          ),
+          _Row(
+            label: 'кэш',
+            value: _bytes(((_info?['derived_bytes'] as num?) ?? 0).toDouble()),
+          ),
         ];
 
       case _Door.looks:

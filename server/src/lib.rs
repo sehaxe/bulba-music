@@ -2,6 +2,7 @@ pub mod api;
 pub mod auth;
 pub mod daily;
 pub mod db;
+pub mod derive;
 pub mod features;
 pub mod index;
 pub mod range;

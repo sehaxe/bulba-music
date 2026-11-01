@@ -76,6 +76,7 @@ class _BulbaAppState extends State<BulbaApp> {
     themeMode.value = Prefs.modeFrom(prefs.themeMode);
     api.token = prefs.token;
     player.crossfade = prefs.crossfade;
+    player.quality = prefs.quality;
     final savedServer = prefs.server;
     if (savedServer != null && savedServer.isNotEmpty) api.base = savedServer;
     player.setVolume(prefs.volume);

@@ -66,6 +66,10 @@ async fn main() -> Result<()> {
         .or_else(|| std::env::var("BULBA_DB").ok())
         .unwrap_or(format!("{home}/.local/share/bulba-music/bulba.db"));
 
+    let db_dir = std::path::Path::new(&db_path)
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
     let db = Db::new(db_path);
     db.init()?;
 
@@ -92,6 +96,7 @@ async fn main() -> Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     let state = AppState {
+        cache: bulba_music_server::derive::Cache::new(db_dir.join("derived")),
         db,
         libraries,
         ignores,
