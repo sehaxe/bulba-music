@@ -49,11 +49,12 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
   Future<void> _load() async {
     try {
       final items = await widget.api.playlists();
-      if (mounted)
+      if (mounted) {
         setState(() {
           _items = items;
           _loading = false;
         });
+      }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }

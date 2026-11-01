@@ -989,9 +989,9 @@ extension PlaylistApi on Api {
           Uri.parse('$base/api/playlists/$id'),
           headers: {'content-type': 'application/json'},
           body: jsonEncode({
-            if (name != null) 'name': name,
-            if (description != null) 'description': description,
-            if (isPublic != null) 'is_public': isPublic,
+            'name': ?name,
+            'description': ?description,
+            'is_public': ?isPublic,
           }),
         )
         .timeout(const Duration(seconds: 15));
@@ -1039,7 +1039,8 @@ extension PlaylistApi on Api {
     final r = on
         ? await _http.post(uri).timeout(const Duration(seconds: 15))
         : await _http.delete(uri).timeout(const Duration(seconds: 15));
-    if (r.statusCode != 200)
+    if (r.statusCode != 200) {
       throw ApiException('playlist like → ${r.statusCode}');
+    }
   }
 }
