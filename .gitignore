@@ -1,9 +1,30 @@
-target/
-data/
+# rust
+/target
+server/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# android
+.gradle/
+local.properties
+*.apk
+*.aab
+.cxx/
+**/build/
+
+# runtime data
+/data/
 *.db
 *.db-wal
 *.db-shm
+incoming/
+
+# flutter
 .dart_tool/
-build/
 .flutter-plugins
 .flutter-plugins-dependencies
+
+# editors / os
+.idea/
+*.swp
+.DS_Store

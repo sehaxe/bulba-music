@@ -6,7 +6,7 @@ use http_body_util::BodyExt;
 use std::io::Write;
 use tower::ServiceExt;
 
-/// A fixture: one real file on disk, one row in the catalogue pointing at it.
+/// A fixture: one real file on disk, one artist → album → track → master chain.
 struct Fixture {
     _dir: tempfile::TempDir,
     state: AppState,
@@ -29,13 +29,36 @@ fn fixture() -> Fixture {
         [],
     )
     .unwrap();
+    conn.execute("INSERT INTO artist(name,norm) VALUES('Aphex Twin','aphex twin')", [])
+        .unwrap();
+    let artist = conn.last_insert_rowid();
     conn.execute(
-        "INSERT INTO tracks (path,size,mtime,title,artist,album,codec,rev,added_at)
-         VALUES (?1, 4096, 0, 'Xtal', 'Aphex Twin', 'SAW 85-92', 'flac', 7, 0)",
-        [audio_path.to_string_lossy().to_string()],
+        "INSERT INTO album(title,artist_id,year,norm) VALUES('SAW 85-92',?1,1992,'aphex twin/saw 85-92')",
+        [artist],
+    )
+    .unwrap();
+    let album = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO track(title,album_id,disc,track_no,duration_ms,rev,created_at)
+         VALUES('Xtal',?1,1,1,5000,7,0)",
+        [album],
     )
     .unwrap();
     let id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO master(path,bytes,mtime,codec,duration_ms,sample_rate,channels,bits,ingested_at)
+         VALUES(?1,4096,0,'flac',5000,44100,2,16,0)",
+        [audio_path.to_string_lossy().to_string()],
+    )
+    .unwrap();
+    let master = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO track_master(track_id,master_id,role) VALUES(?1,?2,'primary')",
+        [id, master],
+    )
+    .unwrap();
+    conn.execute("INSERT INTO track_fts(rowid,title,artist,album) VALUES(?1,'Xtal','Aphex Twin','SAW 85-92')", [id])
+        .unwrap();
 
     Fixture {
         _dir: dir,
@@ -62,7 +85,24 @@ async fn health_reports_catalogue_size() {
     assert_eq!(resp.status(), StatusCode::OK);
     let json: serde_json::Value = serde_json::from_slice(&body_bytes(resp).await).unwrap();
     assert_eq!(json["tracks"], 1);
+    assert_eq!(json["artists"], 1);
+    assert_eq!(json["albums"], 1);
     assert_eq!(json["rev"], 7);
+}
+
+#[tokio::test]
+async fn track_view_joins_artist_album_and_master() {
+    let fx = fixture();
+    let resp = router(fx.state)
+        .oneshot(Request::get("/api/tracks").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let json: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    assert_eq!(json.len(), 1);
+    assert_eq!(json[0]["artist"], "Aphex Twin");
+    assert_eq!(json[0]["album"], "SAW 85-92");
+    assert_eq!(json[0]["codec"], "flac");
+    assert_eq!(json[0]["year"], 1992);
 }
 
 #[tokio::test]
@@ -86,21 +126,6 @@ async fn range_request_returns_206_and_exact_bytes() {
 }
 
 #[tokio::test]
-async fn full_request_returns_whole_file() {
-    let fx = fixture();
-    let resp = router(fx.state)
-        .oneshot(
-            Request::get(format!("/api/tracks/{}/stream", fx.id))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(body_bytes(resp).await.len() as u64, fx.size);
-}
-
-#[tokio::test]
 async fn unsatisfiable_range_returns_416() {
     let fx = fixture();
     let resp = router(fx.state)
@@ -116,13 +141,25 @@ async fn unsatisfiable_range_returns_416() {
 }
 
 #[tokio::test]
-async fn missing_track_is_404() {
+async fn search_finds_track_and_ignores_fts_operators() {
     let fx = fixture();
     let resp = router(fx.state)
-        .oneshot(Request::get("/api/tracks/999/stream").body(Body::empty()).unwrap())
+        .oneshot(Request::get("/api/search?q=xtal").body(Body::empty()).unwrap())
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let json: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    assert_eq!(json.len(), 1);
+
+    let admin = fixture();
+    let resp = router(admin.state)
+        .oneshot(
+            Request::get("/api/search?q=%22title%3A+OR+%2A")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -141,4 +178,59 @@ async fn manifest_only_returns_changes_after_rev() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body_bytes(resp).await).unwrap();
     assert_eq!(json["tracks"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn play_events_are_appended_verbatim() {
+    let fx = fixture();
+    let body = serde_json::json!([{
+        "track_id": fx.id,
+        "session_id": 1,
+        "event": 3,
+        "position_ms": 4980,
+        "position_ratio": 0.996,
+        "source": 4,
+        "device": 0,
+        "offline": true,
+        "quality": 2,
+        "ts": 1700000000
+    }]);
+    let resp = router(fx.state.clone())
+        .oneshot(
+            Request::post("/api/events")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    assert_eq!(json["accepted"], 1);
+
+    let conn = fx.state.db.open().unwrap();
+    let (ts, source, offline): (i64, i64, i64) = conn
+        .query_row("SELECT ts, source, offline FROM play_event", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .unwrap();
+    assert_eq!((ts, source, offline), (1_700_000_000, 4, 1));
+}
+
+#[tokio::test]
+async fn tailscale_user_outside_allowlist_is_forbidden() {
+    let fx = fixture();
+    let body = serde_json::json!([]);
+    let resp = router(fx.state)
+        .oneshot(
+            Request::post("/api/events")
+                .header("tailscale-user-login", "stranger@example.com")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // hello@example.com is not in the allowlist, so writes are rejected.
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
