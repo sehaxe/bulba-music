@@ -51,7 +51,9 @@ class _BulbaAppState extends State<BulbaApp> {
   late final Api api = Api(
     const String.fromEnvironment(
       'BULBA_SERVER',
-      defaultValue: 'http://127.0.0.1:8422',
+      // The phone reaches the same server over Tailscale; on the desktop the
+      // tailnet address works too, so one default suite both.
+      defaultValue: 'http://100.108.226.86:8422',
     ),
   );
   late final PlayerController player = PlayerController(api);
@@ -71,6 +73,8 @@ class _BulbaAppState extends State<BulbaApp> {
     final prefs = await Prefs.load();
     themeMode.value = Prefs.modeFrom(prefs.themeMode);
     api.token = prefs.token;
+    final savedServer = prefs.server;
+    if (savedServer != null && savedServer.isNotEmpty) api.base = savedServer;
     player.setVolume(prefs.volume);
     final skipOnboarding =
         const bool.fromEnvironment('SHOT_ONBOARD') ||

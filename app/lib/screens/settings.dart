@@ -30,6 +30,9 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   String? _token;
+  late final TextEditingController _serverController = TextEditingController(
+    text: widget.api.base,
+  );
   Map<String, dynamic>? _info;
   bool _renaming = false;
   String _embedNote = '';
@@ -177,6 +180,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final info = await widget.api.info();
       if (mounted) setState(() => _info = info);
     } catch (_) {}
+  }
+
+  Future<void> _saveServer(String value) async {
+    final trimmed = value.trim().replaceAll(RegExp(r'/+$'), '');
+    if (trimmed.isEmpty) return;
+    widget.api.base = trimmed;
+    await widget.prefs.setServer(trimmed);
+    await _load();
+    if (mounted) setState(() => _embedNote = 'сервер: $trimmed');
   }
 
   Future<void> _previewRename() async {
@@ -449,7 +461,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _Section(
           title: 'о системе',
           children: [
-            _Row(label: 'сервер', value: widget.api.base),
+            Row(
+              children: [
+                SizedBox(
+                  width: 170,
+                  child: Text('сервер', style: T.caption(p.mute)),
+                ),
+                Expanded(
+                  child: TextField(
+                    controller: _serverController,
+                    style: T.body(p.body),
+                    cursorColor: C.signal,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      hintText: 'http://100.x.y.z:8422',
+                      hintStyle: T.body(p.ash),
+                    ),
+                    onSubmitted: _saveServer,
+                  ),
+                ),
+                const SizedBox(width: S.sm),
+                PillButton(
+                  icon: Icons.save_rounded,
+                  label: 'сохранить',
+                  onTap: () => _saveServer(_serverController.text),
+                ),
+              ],
+            ),
             _Row(label: 'версия', value: '${_info?['version'] ?? '—'}'),
             _Row(
               label: 'модель вкуса',

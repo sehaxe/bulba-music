@@ -23,6 +23,9 @@ class Prefs {
   int get crossfade => _sp.getInt('crossfade_seconds') ?? 0;
   Future<void> setCrossfade(int v) => _sp.setInt('crossfade_seconds', v);
 
+  String? get server => _sp.getString('server');
+  Future<void> setServer(String base) => _sp.setString('server', base);
+
   String? get token => _sp.getString('auth_token');
   Future<void> setToken(String? token) async {
     if (token == null) {
