@@ -32,6 +32,8 @@ impl Db {
         conn.execute_batch(SCHEMA)?;
         // Databases created before covers existed get the column added in place.
         let _ = conn.execute("ALTER TABLE album ADD COLUMN cover_path TEXT", []);
+        let _ = conn.execute("ALTER TABLE track ADD COLUMN tempo_bpm REAL", []);
+        let _ = conn.execute("ALTER TABLE track ADD COLUMN brightness REAL", []);
         Ok(())
     }
 }
@@ -92,6 +94,8 @@ CREATE TABLE IF NOT EXISTS track (
   track_no    INTEGER,
   duration_ms INTEGER,
   loudness_db REAL,
+  tempo_bpm   REAL,
+  brightness  REAL,
   rev         INTEGER NOT NULL,
   created_at  INTEGER NOT NULL
 );
@@ -148,6 +152,16 @@ CREATE TABLE IF NOT EXISTS tombstones (
   id       INTEGER PRIMARY KEY,
   track_id INTEGER NOT NULL,
   rev      INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS daily_mix (
+  day      TEXT NOT NULL,
+  slot     INTEGER NOT NULL,
+  position INTEGER NOT NULL,
+  track_id INTEGER NOT NULL REFERENCES track(id),
+  title    TEXT NOT NULL,
+  note     TEXT NOT NULL,
+  PRIMARY KEY (day, slot, position)
 );
 
 CREATE TABLE IF NOT EXISTS peaks (

@@ -61,38 +61,45 @@ class PlayerBar extends StatelessWidget {
             ),
             Expanded(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: S.lg),
+                padding: const EdgeInsets.only(left: S.lg, right: 6),
                 child: Row(
                   children: [
+                    // Left: what is playing.
                     Expanded(
                       child: _Info(t: t, api: api, player: player, p: p),
                     ),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _CircleButton(
-                          icon: Icons.skip_previous_rounded,
-                          onTap: player.previous,
-                          size: 34,
-                        ),
-                        const SizedBox(width: S.xxs),
-                        _CircleButton(
-                          icon: player.playing
-                              ? Icons.pause_rounded
-                              : Icons.play_arrow_rounded,
-                          onTap: player.toggle,
-                          size: 44,
-                          filled: true,
-                          accent: accent,
-                        ),
-                        const SizedBox(width: S.xxs),
-                        _CircleButton(
-                          icon: Icons.skip_next_rounded,
-                          onTap: player.next,
-                          size: 34,
-                        ),
-                      ],
+                    // Centre: transport. Equal flex on both sides keeps this
+                    // block exactly in the middle of the bar.
+                    SizedBox(
+                      width: 190,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          _CircleButton(
+                            icon: Icons.skip_previous_rounded,
+                            onTap: player.previous,
+                            size: 34,
+                          ),
+                          const SizedBox(width: S.xxs),
+                          _CircleButton(
+                            icon: player.playing
+                                ? Icons.pause_rounded
+                                : Icons.play_arrow_rounded,
+                            onTap: player.toggle,
+                            size: 44,
+                            filled: true,
+                            accent: accent,
+                          ),
+                          const SizedBox(width: S.xxs),
+                          _CircleButton(
+                            icon: Icons.skip_next_rounded,
+                            onTap: player.next,
+                            size: 34,
+                          ),
+                        ],
+                      ),
                     ),
+                    // Right: output level, pinned to the very edge.
                     Expanded(
                       child: Align(
                         alignment: Alignment.centerRight,

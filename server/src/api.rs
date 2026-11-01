@@ -32,6 +32,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/features/build", post(build_features))
         .route("/api/recs/similar/{id}", get(similar))
         .route("/api/recs/home", get(home_mixes))
+        .route("/api/recs/daily", get(daily_mixes))
         .route("/api/manifest", get(manifest))
         .route("/api/events", post(record_events))
         .with_state(state)
@@ -410,7 +411,7 @@ async fn build_features(
         let mut done = 0usize;
         for (id, path) in &rows {
             match crate::features::extract(path) {
-                Ok(vec) => {
+                Ok(fp) => {
                     conn.execute(
                         "INSERT OR REPLACE INTO embed(model, track_id, dim, vec)
                          VALUES(?1, ?2, ?3, ?4)",
@@ -418,8 +419,12 @@ async fn build_features(
                             crate::features::MODEL,
                             id,
                             crate::features::DIM as i64,
-                            crate::features::to_blob(&vec)
+                            crate::features::to_blob(&fp.vec)
                         ],
+                    )?;
+                    conn.execute(
+                        "UPDATE track SET tempo_bpm=?1, brightness=?2 WHERE id=?3",
+                        rusqlite::params![fp.tempo_bpm, fp.brightness, id],
                     )?;
                     done += 1;
                 }
@@ -634,6 +639,32 @@ async fn home_mixes(State(st): State<AppState>) -> Result<Json<Vec<Mix>>, ApiErr
     Ok(Json(mixes))
 }
 
+/// Four numbered playlists, stable for the day.
+async fn daily_mixes(State(st): State<AppState>) -> Result<Json<Vec<Mix>>, ApiError> {
+    let db = st.db.clone();
+    let mixes = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Mix>> {
+        let conn = db.open()?;
+        crate::daily::ensure(&conn, crate::features::MODEL)?;
+        let rows = crate::daily::load(&conn)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for m in rows {
+            let tracks = tracks_by_ids(&conn, &m.ids)?;
+            if tracks.is_empty() {
+                continue;
+            }
+            out.push(Mix {
+                id: format!("day-{}", m.slot),
+                title: m.title,
+                note: m.note,
+                tracks,
+            });
+        }
+        Ok(out)
+    })
+    .await??;
+    Ok(Json(mixes))
+}
+
 #[derive(Debug, Deserialize)]
 struct SimilarQuery {
     n: Option<i64>,
@@ -668,7 +699,7 @@ async fn similar(
                     [id],
                     |r| r.get(0),
                 )?;
-                let vec = crate::features::extract(&path)?;
+                let fp = crate::features::extract(&path)?;
                 conn.execute(
                     "INSERT OR REPLACE INTO embed(model, track_id, dim, vec)
                      VALUES(?1, ?2, ?3, ?4)",
@@ -676,10 +707,14 @@ async fn similar(
                         crate::features::MODEL,
                         id,
                         crate::features::DIM as i64,
-                        crate::features::to_blob(&vec)
+                        crate::features::to_blob(&fp.vec)
                     ],
                 )?;
-                vec
+                conn.execute(
+                    "UPDATE track SET tempo_bpm=?1, brightness=?2 WHERE id=?3",
+                    rusqlite::params![fp.tempo_bpm, fp.brightness, id],
+                )?;
+                fp.vec
             }
         };
 

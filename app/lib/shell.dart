@@ -7,6 +7,7 @@ import 'design/accent.dart';
 import 'design/components.dart';
 import 'design/tokens.dart';
 import 'player/controller.dart';
+import 'screens/collection.dart';
 import 'screens/home.dart';
 import 'screens/library.dart';
 import 'screens/player_screen.dart';
@@ -38,6 +39,7 @@ class _ShellState extends State<Shell> {
   int _tab = 0;
   Color _accent = C.signal;
   int? _accentTrack;
+  Collection? _collection;
 
   @override
   void initState() {
@@ -78,10 +80,31 @@ class _ShellState extends State<Shell> {
       });
       final autoPlay =
           const bool.fromEnvironment('SHOT_PLAYER') ||
-          Platform.environment['BULBA_AUTOPLAY'] == '1';
+          Platform.environment['BULBA_AUTOPLAY'] != null;
+      if (Platform.environment['BULBA_OPEN_COLLECTION'] != null) {
+        final mixes = await widget.api.dailyMixes();
+        if (mixes.isNotEmpty && mounted) {
+          final mix = mixes.first;
+          final covers = <String?>[];
+          for (final t in mix.tracks) {
+            final url = widget.api.cover(t.albumId, t.hasCover);
+            if (url != null && !covers.contains(url)) covers.add(url);
+            if (covers.length == 4) break;
+          }
+          setState(
+            () => _collection = Collection(
+              title: mix.title,
+              subtitle: mix.note,
+              tracks: mix.tracks,
+              mosaic: covers,
+            ),
+          );
+        }
+      }
       if (autoPlay && tracks.isNotEmpty) {
         await widget.player.play(tracks.first, queue: tracks);
-        if (mounted) _openPlayer();
+        final barOnly = Platform.environment['BULBA_AUTOPLAY'] == 'bar';
+        if (mounted && !barOnly) _openPlayer();
       }
     } catch (e) {
       if (!mounted) return;
@@ -198,7 +221,10 @@ class _ShellState extends State<Shell> {
     );
   }
 
-  void _select(int i) => setState(() => _tab = i);
+  void _select(int i) => setState(() {
+    _tab = i;
+    _collection = null;
+  });
 
   Widget _screen() {
     final p = Palette.of(context);
@@ -241,6 +267,17 @@ class _ShellState extends State<Shell> {
         ),
       );
     }
+    final collection = _collection;
+    if (collection != null) {
+      return CollectionView(
+        collection: collection,
+        api: widget.api,
+        player: widget.player,
+        onRadio: _startRadio,
+        onBack: () => setState(() => _collection = null),
+        accent: _accent,
+      );
+    }
     switch (_tab) {
       case 0:
         return HomeScreen(
@@ -249,6 +286,8 @@ class _ShellState extends State<Shell> {
           player: widget.player,
           onRadio: _startRadio,
           onRescan: _rescan,
+          accent: _accent,
+          onOpen: (collection) => setState(() => _collection = collection),
         );
       case 1:
         return SearchScreen(

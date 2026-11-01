@@ -185,6 +185,19 @@ class Api {
         .toList(growable: false);
   }
 
+  Future<List<Mix>> dailyMixes() async {
+    final r = await _http
+        .get(Uri.parse('$base/api/recs/daily'))
+        .timeout(const Duration(seconds: 30));
+    if (r.statusCode != 200) {
+      throw ApiException('recs/daily → ${r.statusCode}');
+    }
+    final list = jsonDecode(r.body) as List<dynamic>;
+    return list
+        .map((e) => Mix.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false);
+  }
+
   Future<List<Mix>> homeMixes() async {
     final r = await _http
         .get(Uri.parse('$base/api/recs/home'))

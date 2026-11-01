@@ -64,7 +64,8 @@ fn fixture() -> Fixture {
         _dir: dir,
         state: AppState {
             db,
-            library: std::path::PathBuf::from("/nonexistent"),
+            libraries: vec![std::path::PathBuf::from("/nonexistent")],
+            ignores: vec![],
         },
         id,
         size: 4096,

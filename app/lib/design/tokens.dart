@@ -140,3 +140,18 @@ String mmss(Duration d) {
   final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
   return d.inHours > 0 ? '${d.inHours}:$m:$s' : '$m:$s';
 }
+
+/// Russian plural for counts: 1 трек, 2 трека, 5 треков.
+String plural(
+  int n, {
+  String one = 'трек',
+  String few = 'трека',
+  String many = 'треков',
+}) {
+  final mod100 = n % 100;
+  final mod10 = n % 10;
+  if (mod100 >= 11 && mod100 <= 14) return many;
+  if (mod10 == 1) return one;
+  if (mod10 >= 2 && mod10 <= 4) return few;
+  return many;
+}

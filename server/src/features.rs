@@ -19,9 +19,20 @@ const MEL_BANDS: usize = 40;
 const MIN_BPM: f32 = 55.0;
 const MAX_BPM: f32 = 200.0;
 
-pub fn extract(path: &str) -> Result<Vec<f32>> {
+pub struct Fingerprint {
+    pub vec: Vec<f32>,
+    pub tempo_bpm: f32,
+    pub brightness: f32,
+}
+
+pub fn extract(path: &str) -> Result<Fingerprint> {
     let pcm = decode(path)?;
-    Ok(embed(&pcm))
+    let (vec, tempo_bpm, brightness) = embed(&pcm);
+    Ok(Fingerprint {
+        vec,
+        tempo_bpm,
+        brightness,
+    })
 }
 
 fn decode(path: &str) -> Result<Vec<f32>> {
@@ -91,10 +102,10 @@ fn chroma_map() -> Vec<Option<usize>> {
         .collect()
 }
 
-fn embed(pcm: &[f32]) -> Vec<f32> {
+fn embed(pcm: &[f32]) -> (Vec<f32>, f32, f32) {
     let mut out = vec![0.0f32; DIM];
     if pcm.len() < N_FFT {
-        return out;
+        return (out, 0.0, 0.0);
     }
 
     let mut planner = FftPlanner::<f32>::new();
@@ -183,7 +194,7 @@ fn embed(pcm: &[f32]) -> Vec<f32> {
     }
 
     if frames == 0 {
-        return out;
+        return (out, 0.0, 0.0);
     }
 
     // mel: mean log energy, centred so loudness differences do not dominate.
@@ -198,10 +209,12 @@ fn embed(pcm: &[f32]) -> Vec<f32> {
         out[MEL_BANDS + i] = (chroma_acc[i] / chroma_scale) as f32;
     }
 
-    out[52] = (centroid / frames as f64) as f32;
+    let brightness = (centroid / frames as f64) as f32;
+    let tempo_bpm = tempo_from_onsets(&onsets);
+    out[52] = brightness;
     out[53] = (flatness / frames as f64) as f32;
     out[54] = (rolloff / frames as f64) as f32;
-    out[55] = tempo_from_onsets(&onsets) / MAX_BPM;
+    out[55] = tempo_bpm / MAX_BPM;
 
     // Per-block weighting, then one L2 normalisation.
     for i in 0..MEL_BANDS {
@@ -221,7 +234,7 @@ fn embed(pcm: &[f32]) -> Vec<f32> {
             *v /= norm;
         }
     }
-    out
+    (out, tempo_bpm, brightness)
 }
 
 /// Autocorrelation of the spectral-flux envelope: the lag of the strongest
@@ -287,7 +300,7 @@ mod tests {
     #[test]
     fn chroma_identifies_the_pitch_class() {
         // 440 Hz is A = pitch class 9.
-        let v = embed(&sine(440.0, 4.0));
+        let (v, _, _) = embed(&sine(440.0, 4.0));
         let chroma = &v[MEL_BANDS..MEL_BANDS + 12];
         let best = chroma
             .iter()
@@ -300,30 +313,30 @@ mod tests {
 
     #[test]
     fn vector_is_normalised_and_stable() {
-        let a = embed(&sine(220.0, 3.0));
-        let b = embed(&sine(220.0, 3.0));
+        let (a, _, _) = embed(&sine(220.0, 3.0));
+        let (b, _, _) = embed(&sine(220.0, 3.0));
         assert!((a.iter().map(|x| x * x).sum::<f32>() - 1.0).abs() < 1e-4);
         assert!(cosine(&a, &b) > 0.999);
     }
 
     #[test]
     fn different_pitches_are_less_similar_than_identical_ones() {
-        let a = embed(&sine(220.0, 3.0));
-        let b = embed(&sine(330.0, 3.0));
-        let c = embed(&sine(220.0, 3.0));
+        let (a, _, _) = embed(&sine(220.0, 3.0));
+        let (b, _, _) = embed(&sine(330.0, 3.0));
+        let (c, _, _) = embed(&sine(220.0, 3.0));
         assert!(cosine(&a, &b) < cosine(&a, &c));
     }
 
     #[test]
     fn blob_roundtrip() {
-        let v = embed(&sine(500.0, 2.0));
+        let (v, _, _) = embed(&sine(500.0, 2.0));
         let back = from_blob(&to_blob(&v));
         assert_eq!(v, back);
     }
 
     #[test]
     fn silence_does_not_panic_or_nan() {
-        let v = embed(&vec![0.0; SAMPLE_RATE as usize]);
+        let (v, _, _) = embed(&vec![0.0; SAMPLE_RATE as usize]);
         assert_eq!(v.len(), DIM);
         assert!(v.iter().all(|x| x.is_finite()));
     }
