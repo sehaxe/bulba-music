@@ -21,3 +21,15 @@ Endpoints: `/api/health`, `/api/scan`, `/api/tracks`, `/api/tracks/{id}`,
 ```sh
 cargo test
 ```
+
+## app
+
+```sh
+export PATH="$HOME/development/flutter/bin:$PATH"
+cd app
+flutter run -d linux --dart-define=BULBA_SERVER=http://127.0.0.1:8422
+flutter build linux --release          # native binary in build/linux/x64/release/bundle
+```
+
+Design tokens and rules live in `DESIGN.md`. Debug builds are several times slower than
+release — judge animation smoothness only from a release build.

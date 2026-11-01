@@ -30,6 +30,8 @@ impl Db {
     pub fn init(&self) -> Result<()> {
         let conn = self.open()?;
         conn.execute_batch(SCHEMA)?;
+        // Databases created before covers existed get the column added in place.
+        let _ = conn.execute("ALTER TABLE album ADD COLUMN cover_path TEXT", []);
         Ok(())
     }
 }
@@ -78,6 +80,7 @@ CREATE TABLE IF NOT EXISTS album (
   artist_id  INTEGER NOT NULL REFERENCES artist(id),
   year       INTEGER,
   disc_total INTEGER,
+  cover_path TEXT,
   norm       TEXT NOT NULL UNIQUE
 );
 
@@ -147,6 +150,11 @@ CREATE TABLE IF NOT EXISTS tombstones (
   rev      INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS peaks (
+  track_id INTEGER PRIMARY KEY REFERENCES track(id),
+  data     BLOB NOT NULL
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS track_fts USING fts5(
   title, artist, album,
   tokenize='unicode61 remove_diacritics 2'
@@ -159,6 +167,8 @@ SELECT
   al.title AS album,
   al.year,
   t.disc, t.track_no, t.duration_ms,
+  al.id AS album_id,
+  (al.cover_path IS NOT NULL) AS has_cover,
   (SELECT m.codec FROM track_master tm JOIN master m ON m.id = tm.master_id
     WHERE tm.track_id = t.id ORDER BY (m.codec = 'flac') DESC, m.bytes DESC LIMIT 1) AS codec,
   (SELECT m.bitrate FROM track_master tm JOIN master m ON m.id = tm.master_id

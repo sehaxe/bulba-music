@@ -47,6 +47,7 @@ struct Props {
     sample_rate: Option<i64>,
     bit_depth: Option<i64>,
     channels: Option<i64>,
+    cover: Option<(Vec<u8>, String)>,
 }
 
 pub fn is_audio(path: &Path) -> bool {
@@ -105,6 +106,14 @@ fn read_props(path: &Path) -> Result<Props> {
         if out.artist.as_deref().map(is_junk).unwrap_or(true) {
             out.artist = first_string(t, &[ItemKey::Composer]).filter(|s| !is_junk(s));
         }
+    }
+
+    if let Some(pic) = tag.and_then(|t| t.pictures().first()) {
+        let mime = pic
+            .mime_type()
+            .map(|m| m.to_string())
+            .unwrap_or_else(|| "image/jpeg".to_string());
+        out.cover = Some((pic.data().to_vec(), mime));
     }
 
     if out.title.trim().is_empty() {
@@ -231,6 +240,12 @@ fn reindex_fts(tx: &Transaction, track_id: i64) -> Result<()> {
 
 pub fn scan(db: &Db, root: &Path) -> Result<ScanReport> {
     let mut conn = db.open()?;
+    let covers_dir = db
+        .path()
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("covers");
+    std::fs::create_dir_all(&covers_dir)?;
     let tx = conn.transaction()?;
     let mut report = ScanReport::default();
 
@@ -292,6 +307,24 @@ pub fn scan(db: &Db, root: &Path) -> Result<ScanReport> {
             .filter(|a| !is_junk(a))
             .unwrap_or_else(|| "Unknown Album".into());
         let album = album_id(&tx, &album_title, artist, &norm(&artist_name), props.year)?;
+
+        // The first embedded picture wins; an album never loses its art on rescan.
+        if let Some((bytes, mime)) = &props.cover {
+            let existing_cover: Option<String> = tx
+                .query_row("SELECT cover_path FROM album WHERE id=?1", [album], |r| r.get(0))
+                .ok()
+                .flatten();
+            if existing_cover.is_none() {
+                let ext = if mime.contains("png") { "png" } else { "jpg" };
+                let path = covers_dir.join(format!("{album}.{ext}"));
+                if std::fs::write(&path, bytes).is_ok() {
+                    tx.execute(
+                        "UPDATE album SET cover_path=?1 WHERE id=?2",
+                        params![path.to_string_lossy().to_string(), album],
+                    )?;
+                }
+            }
+        }
         let (track, created) = upsert_track(&tx, album, &props)?;
         touched_tracks.insert(track);
         if created {

@@ -26,6 +26,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/tracks/{id}", get(get_track))
         .route("/api/tracks/{id}/stream", get(stream))
         .route("/api/search", get(search))
+        .route("/api/albums/{id}/cover", get(cover))
+        .route("/api/tracks/{id}/peaks", get(peaks))
         .route("/api/manifest", get(manifest))
         .route("/api/events", post(record_events))
         .with_state(state)
@@ -82,6 +84,8 @@ pub struct Track {
     pub title: String,
     pub artist: String,
     pub album: String,
+    pub album_id: i64,
+    pub has_cover: bool,
     pub year: Option<i64>,
     pub disc: Option<i64>,
     pub track_no: Option<i64>,
@@ -96,8 +100,8 @@ pub struct Track {
     pub rev: i64,
 }
 
-const TRACK_COLUMNS: &str = "id, title, artist, album, year, disc, track_no, duration_ms,
-    codec, bitrate, sample_rate, bits, channels, bytes, master_count, rev";
+const TRACK_COLUMNS: &str = "id, title, artist, album, album_id, has_cover, year, disc,
+    track_no, duration_ms, codec, bitrate, sample_rate, bits, channels, bytes, master_count, rev";
 
 fn map_track(r: &rusqlite::Row) -> rusqlite::Result<Track> {
     Ok(Track {
@@ -105,18 +109,20 @@ fn map_track(r: &rusqlite::Row) -> rusqlite::Result<Track> {
         title: r.get(1)?,
         artist: r.get(2)?,
         album: r.get(3)?,
-        year: r.get(4)?,
-        disc: r.get(5)?,
-        track_no: r.get(6)?,
-        duration_ms: r.get(7)?,
-        codec: r.get(8)?,
-        bitrate: r.get(9)?,
-        sample_rate: r.get(10)?,
-        bits: r.get(11)?,
-        channels: r.get(12)?,
-        bytes: r.get(13)?,
-        master_count: r.get(14)?,
-        rev: r.get(15)?,
+        album_id: r.get(4)?,
+        has_cover: r.get(5)?,
+        year: r.get(6)?,
+        disc: r.get(7)?,
+        track_no: r.get(8)?,
+        duration_ms: r.get(9)?,
+        codec: r.get(10)?,
+        bitrate: r.get(11)?,
+        sample_rate: r.get(12)?,
+        bits: r.get(13)?,
+        channels: r.get(14)?,
+        bytes: r.get(15)?,
+        master_count: r.get(16)?,
+        rev: r.get(17)?,
     })
 }
 
@@ -343,6 +349,122 @@ async fn record_events(
     })
     .await??;
     Ok(Json(json!({ "accepted": accepted })))
+}
+
+/// Waveform peaks, 160 buckets, computed once per track with ffmpeg and cached.
+/// The client draws them mirrored around the centre line.
+async fn peaks(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<Vec<u8>>, ApiError> {
+    let db = st.db.clone();
+    let cached = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Vec<u8>>> {
+        let conn = db.open()?;
+        let row = conn
+            .query_row("SELECT data FROM peaks WHERE track_id=?1", [id], |r| {
+                r.get::<_, Vec<u8>>(0)
+            })
+            .ok();
+        Ok(row)
+    })
+    .await??;
+    if let Some(data) = cached {
+        return Ok(Json(data));
+    }
+
+    let db = st.db.clone();
+    let path = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<String>> {
+        let conn = db.open()?;
+        Ok(conn
+            .query_row(
+                "SELECT m.path FROM track_master tm JOIN master m ON m.id=tm.master_id
+                 WHERE tm.track_id=?1 ORDER BY (m.codec='flac') DESC LIMIT 1",
+                [id],
+                |r| r.get::<_, String>(0),
+            )
+            .ok())
+    })
+    .await??;
+    let path = path.ok_or_else(|| ApiError::not_found("track"))?;
+
+    let data = tokio::task::spawn_blocking(move || compute_peaks(&path)).await??;
+    let db = st.db.clone();
+    let store = data.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let conn = db.open()?;
+        conn.execute(
+            "INSERT OR REPLACE INTO peaks(track_id, data) VALUES(?1, ?2)",
+            rusqlite::params![id, store],
+        )?;
+        Ok(())
+    })
+    .await??;
+    Ok(Json(data))
+}
+
+fn compute_peaks(path: &str) -> anyhow::Result<Vec<u8>> {
+    use std::process::Command;
+    let out = Command::new("ffmpeg")
+        .args(["-v", "error", "-i", path, "-ac", "1", "-ar", "8000", "-f", "s16le", "-"])
+        .output()?;
+    let bytes = out.stdout;
+    let samples: Vec<f64> = bytes
+        .chunks_exact(2)
+        .map(|c| i16::from_le_bytes([c[0], c[1]]) as f64 / 32768.0)
+        .collect();
+    const BUCKETS: usize = 160;
+    let mut peaks = Vec::with_capacity(BUCKETS);
+    if samples.is_empty() {
+        return Ok(vec![0; BUCKETS]);
+    }
+    let bucket = (samples.len() / BUCKETS).max(1);
+    for i in 0..BUCKETS {
+        let start = i * bucket;
+        let end = ((i + 1) * bucket).min(samples.len());
+        if start >= end {
+            peaks.push(0);
+            continue;
+        }
+        let sum: f64 = samples[start..end].iter().map(|s| s * s).sum();
+        let rms = (sum / (end - start) as f64).sqrt();
+        peaks.push((rms.powf(0.6) * 255.0).clamp(0.0, 255.0) as u8);
+    }
+    // Normalise to the track's own 95th percentile so quiet masters still show
+    // a readable shape instead of a flat line.
+    let mut sorted = peaks.clone();
+    sorted.sort_unstable();
+    let p95 = sorted[((sorted.len() as f64) * 0.95) as usize].max(1) as f64;
+    for v in peaks.iter_mut() {
+        *v = ((*v as f64 / p95) * 255.0).clamp(0.0, 255.0) as u8;
+    }
+    Ok(peaks)
+}
+
+async fn cover(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Response, ApiError> {
+    let path = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<String>> {
+        let conn = st.db.open()?;
+        Ok(conn
+            .query_row("SELECT cover_path FROM album WHERE id=?1", [id], |r| {
+                r.get::<_, Option<String>>(0)
+            })
+            .ok()
+            .flatten())
+    })
+    .await??;
+    let path = path.ok_or_else(|| ApiError::not_found("cover"))?;
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|_| ApiError::not_found("cover"))?;
+    let mime = if path.ends_with(".png") { "image/png" } else { "image/jpeg" };
+    Response::builder()
+        .header(header::CONTENT_TYPE, mime)
+        .header(header::CONTENT_LENGTH, bytes.len())
+        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+        .body(axum::body::Body::from(bytes))
+        .map_err(ApiError::internal)
 }
 
 fn mime_for(codec: &str) -> &'static str {
