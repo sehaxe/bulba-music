@@ -8,6 +8,7 @@ import 'player/controller.dart';
 import 'screens/home.dart';
 import 'screens/library.dart';
 import 'screens/player_screen.dart';
+import 'screens/radio.dart';
 import 'widgets/nav.dart';
 import 'widgets/player_bar.dart';
 
@@ -83,11 +84,45 @@ class _ShellState extends State<Shell> {
     }
   }
 
+  Future<void> _rescan() async {
+    setState(() => _loading = true);
+    try {
+      await widget.api.scan();
+      await widget.api.buildFeatures(limit: 500);
+      await _load();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = e.toString();
+        });
+      }
+    }
+  }
+
+  Future<void> _startRadio(Track seed) async {
+    try {
+      final similar = await widget.api.similar(seed.id, n: 40);
+      if (similar.isEmpty) return;
+      await widget.player.play(similar.first, queue: similar);
+      if (mounted) {
+        setState(() => _tab = 2);
+        if (MediaQuery.sizeOf(context).width < 900) _openPlayer();
+      }
+    } catch (e) {
+      debugPrint('radio failed: $e');
+    }
+  }
+
   void _openPlayer() {
     if (widget.player.current == null) return;
     Navigator.of(context).push(
       PixelPageRoute<void>(
-        builder: (_) => PlayerScreen(player: widget.player, api: widget.api),
+        builder: (_) => PlayerScreen(
+          player: widget.player,
+          api: widget.api,
+          onRadio: _startRadio,
+        ),
       ),
     );
   }
@@ -201,17 +236,21 @@ class _ShellState extends State<Shell> {
           tracks: _tracks,
           api: widget.api,
           player: widget.player,
+          onRadio: _startRadio,
+          onRescan: _rescan,
         );
       case 1:
         return LibraryScreen(
           tracks: _tracks,
           api: widget.api,
           player: widget.player,
+          onRadio: _startRadio,
         );
       case 2:
-        return const PlaceholderScreen(
-          title: 'radio',
-          note: 'embeddings land here next',
+        return RadioScreen(
+          player: widget.player,
+          api: widget.api,
+          onRadio: _startRadio,
         );
       case 3:
         return const PlaceholderScreen(

@@ -28,6 +28,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/search", get(search))
         .route("/api/albums/{id}/cover", get(cover))
         .route("/api/tracks/{id}/peaks", get(peaks))
+        .route("/api/features/build", post(build_features))
+        .route("/api/recs/similar/{id}", get(similar))
         .route("/api/manifest", get(manifest))
         .route("/api/events", post(record_events))
         .with_state(state)
@@ -349,6 +351,155 @@ async fn record_events(
     })
     .await??;
     Ok(Json(json!({ "accepted": accepted })))
+}
+
+#[derive(Debug, Deserialize)]
+struct BuildQuery {
+    limit: Option<i64>,
+}
+
+/// Computes content embeddings for tracks that do not have one yet.
+/// The client calls this after a scan; it is incremental and safe to repeat.
+async fn build_features(
+    State(st): State<AppState>,
+    Query(q): Query<BuildQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let limit = q.limit.unwrap_or(200).clamp(1, 5000);
+    let db = st.db.clone();
+    let stats = tokio::task::spawn_blocking(move || -> anyhow::Result<(usize, i64)> {
+        let conn = db.open()?;
+        let rows: Vec<(i64, String)> = {
+            let mut stmt = conn.prepare(
+                "SELECT t.id, m.path
+                 FROM track t
+                 JOIN track_master tm ON tm.track_id = t.id
+                 JOIN master m ON m.id = tm.master_id
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM embed e WHERE e.track_id = t.id AND e.model = ?1)
+                 GROUP BY t.id
+                 ORDER BY t.id
+                 LIMIT ?2",
+            )?;
+            stmt.query_map(rusqlite::params![crate::features::MODEL, limit], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect()
+        };
+        let mut done = 0usize;
+        for (id, path) in &rows {
+            match crate::features::extract(path) {
+                Ok(vec) => {
+                    conn.execute(
+                        "INSERT OR REPLACE INTO embed(model, track_id, dim, vec)
+                         VALUES(?1, ?2, ?3, ?4)",
+                        rusqlite::params![
+                            crate::features::MODEL,
+                            id,
+                            crate::features::DIM as i64,
+                            crate::features::to_blob(&vec)
+                        ],
+                    )?;
+                    done += 1;
+                }
+                Err(e) => tracing::warn!("features failed for {path}: {e}"),
+            }
+        }
+        let remaining: i64 = conn.query_row(
+            "SELECT count(*) FROM track t WHERE NOT EXISTS (
+                 SELECT 1 FROM embed e WHERE e.track_id = t.id AND e.model = ?1)",
+            [crate::features::MODEL],
+            |r| r.get(0),
+        )?;
+        Ok((done, remaining))
+    })
+    .await??;
+    Ok(Json(json!({
+        "computed": stats.0,
+        "remaining": stats.1,
+        "model": crate::features::MODEL,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct SimilarQuery {
+    n: Option<i64>,
+}
+
+/// Content-based neighbours: cosine over the stored embeddings. Brute force is
+/// intentional — 10k × 56 floats is ~5 ms, and an ANN index becomes worth its
+/// complexity somewhere past 100k tracks.
+async fn similar(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    Query(q): Query<SimilarQuery>,
+) -> Result<Json<Vec<Track>>, ApiError> {
+    let n = q.n.unwrap_or(25).clamp(1, 200);
+    let tracks = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Track>> {
+        let conn = st.db.open()?;
+
+        let seed = conn
+            .query_row(
+                "SELECT vec FROM embed WHERE track_id=?1 AND model=?2",
+                rusqlite::params![id, crate::features::MODEL],
+                |r| r.get::<_, Vec<u8>>(0),
+            )
+            .ok();
+        let seed = match seed {
+            Some(blob) => crate::features::from_blob(&blob),
+            None => {
+                // Compute it on demand so the first click on a fresh library works.
+                let path: String = conn.query_row(
+                    "SELECT m.path FROM track_master tm JOIN master m ON m.id=tm.master_id
+                     WHERE tm.track_id=?1 ORDER BY (m.codec='flac') DESC LIMIT 1",
+                    [id],
+                    |r| r.get(0),
+                )?;
+                let vec = crate::features::extract(&path)?;
+                conn.execute(
+                    "INSERT OR REPLACE INTO embed(model, track_id, dim, vec)
+                     VALUES(?1, ?2, ?3, ?4)",
+                    rusqlite::params![
+                        crate::features::MODEL,
+                        id,
+                        crate::features::DIM as i64,
+                        crate::features::to_blob(&vec)
+                    ],
+                )?;
+                vec
+            }
+        };
+
+        let mut scored: Vec<(i64, f32)> = {
+            let mut stmt = conn.prepare(
+                "SELECT track_id, vec FROM embed WHERE model=?1 AND track_id<>?2",
+            )?;
+            stmt.query_map(rusqlite::params![crate::features::MODEL, id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })?
+            .filter_map(|r| r.ok())
+            .map(|(track, blob)| {
+                let v = crate::features::from_blob(&blob);
+                (track, crate::features::cosine(&seed, &v))
+            })
+            .collect()
+        };
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(n as usize);
+
+        let mut out = Vec::with_capacity(scored.len());
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {TRACK_COLUMNS} FROM v_track WHERE id=?1"
+        ))?;
+        for (track_id, _) in scored {
+            if let Ok(t) = stmt.query_row([track_id], map_track) {
+                out.push(t);
+            }
+        }
+        Ok(out)
+    })
+    .await??;
+    Ok(Json(tracks))
 }
 
 /// Waveform peaks, 160 buckets, computed once per track with ffmpeg and cached.

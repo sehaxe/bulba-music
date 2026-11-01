@@ -11,6 +11,7 @@ class TrackRow extends StatefulWidget {
     required this.playing,
     required this.coverUrl,
     required this.onTap,
+    this.onRadio,
     this.showCover = true,
     this.index,
   });
@@ -19,6 +20,7 @@ class TrackRow extends StatefulWidget {
   final bool playing;
   final String? coverUrl;
   final VoidCallback onTap;
+  final VoidCallback? onRadio;
   final bool showCover;
   final int? index;
 
@@ -28,6 +30,23 @@ class TrackRow extends StatefulWidget {
 
 class _TrackRowState extends State<TrackRow> {
   bool _hover = false;
+
+  Future<void> _menu(BuildContext context, Offset at) async {
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (overlay == null) return;
+    final chosen = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        at & const Size(1, 1),
+        Offset.zero & overlay.size,
+      ),
+      items: const [
+        PopupMenuItem(value: 'radio', child: Text('радио от этого трека')),
+      ],
+    );
+    if (chosen == 'radio') widget.onRadio?.call();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -40,6 +59,10 @@ class _TrackRowState extends State<TrackRow> {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: widget.onTap,
+        onLongPress: widget.onRadio,
+        onSecondaryTapDown: widget.onRadio == null
+            ? null
+            : (d) => _menu(context, d.globalPosition),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 90),
           curve: Curves.easeOut,

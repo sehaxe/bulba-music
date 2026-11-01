@@ -11,9 +11,15 @@ import '../player/controller.dart';
 import '../widgets/waveform.dart';
 
 class PlayerScreen extends StatelessWidget {
-  const PlayerScreen({super.key, required this.player, required this.api});
+  const PlayerScreen({
+    super.key,
+    required this.player,
+    required this.api,
+    required this.onRadio,
+  });
   final PlayerController player;
   final Api api;
+  final void Function(Track) onRadio;
 
   @override
   Widget build(BuildContext context) {
@@ -49,7 +55,13 @@ class PlayerScreen extends StatelessWidget {
                   SafeArea(
                     child: Column(
                       children: [
-                        _TopBar(player: player, api: api, p: p, track: t),
+                        _TopBar(
+                          player: player,
+                          api: api,
+                          p: p,
+                          track: t,
+                          onRadio: onRadio,
+                        ),
                         Expanded(
                           child: Center(
                             child: SingleChildScrollView(
@@ -220,12 +232,14 @@ class _TopBar extends StatelessWidget {
     required this.api,
     required this.p,
     required this.track,
+    required this.onRadio,
   });
 
   final PlayerController player;
   final Api api;
   final Palette p;
   final Track track;
+  final void Function(Track) onRadio;
 
   @override
   Widget build(BuildContext context) {
@@ -241,7 +255,7 @@ class _TopBar extends StatelessWidget {
           const Spacer(),
           IconButton(
             icon: Icon(Icons.more_vert_rounded, color: p.onRoom),
-            onPressed: () => _openMenu(context, player, api, track),
+            onPressed: () => _openMenu(context, player, api, track, onRadio),
           ),
         ],
       ),
@@ -254,6 +268,7 @@ void _openMenu(
   PlayerController player,
   Api api,
   Track track,
+  void Function(Track) onRadio,
 ) {
   final p = Palette.of(context);
   showModalBottomSheet<void>(
@@ -267,6 +282,14 @@ void _openMenu(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          _MenuRow(
+            icon: Icons.auto_awesome_rounded,
+            label: 'радио от этого трека',
+            onTap: () {
+              Navigator.of(context).maybePop();
+              onRadio(track);
+            },
+          ),
           _MenuRow(icon: Icons.shuffle_rounded, label: 'shuffle queue'),
           _MenuRow(icon: Icons.repeat_rounded, label: 'repeat'),
           _MenuRow(icon: Icons.queue_music_rounded, label: 'open queue'),
@@ -285,9 +308,10 @@ void _openMenu(
 }
 
 class _MenuRow extends StatelessWidget {
-  const _MenuRow({required this.icon, required this.label});
+  const _MenuRow({required this.icon, required this.label, this.onTap});
   final IconData icon;
   final String label;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -296,7 +320,7 @@ class _MenuRow extends StatelessWidget {
       dense: true,
       leading: Icon(icon, size: 20, color: p.onRoomMute),
       title: Text(label, style: T.body(p.onRoom)),
-      onTap: () => Navigator.of(context).maybePop(),
+      onTap: onTap ?? () => Navigator.of(context).maybePop(),
     );
   }
 }

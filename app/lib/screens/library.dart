@@ -12,11 +12,13 @@ class LibraryScreen extends StatefulWidget {
     required this.tracks,
     required this.api,
     required this.player,
+    required this.onRadio,
   });
 
   final List<Track> tracks;
   final Api api;
   final PlayerController player;
+  final void Function(Track) onRadio;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -137,6 +139,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                         coverUrl: widget.api.cover(t.albumId, t.hasCover),
                         index: i + 1,
                         onTap: () => widget.player.play(t, queue: rows),
+                        onRadio: () => widget.onRadio(t),
                       ),
                     );
                   },

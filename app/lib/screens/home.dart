@@ -11,12 +11,14 @@ class AlbumCard extends StatefulWidget {
     required this.album,
     required this.coverUrl,
     required this.onPlay,
+    this.onRadio,
     this.size = 160,
   });
 
   final Album album;
   final String? coverUrl;
   final VoidCallback onPlay;
+  final VoidCallback? onRadio;
   final double size;
 
   @override
@@ -36,6 +38,7 @@ class _AlbumCardState extends State<AlbumCard> {
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         onTap: widget.onPlay,
+        onLongPress: widget.onRadio,
         child: AnimatedSlide(
           duration: const Duration(milliseconds: 160),
           curve: Curves.easeOut,
@@ -82,11 +85,15 @@ class HomeScreen extends StatelessWidget {
     required this.tracks,
     required this.api,
     required this.player,
+    required this.onRadio,
+    required this.onRescan,
   });
 
   final List<Track> tracks;
   final Api api;
   final PlayerController player;
+  final void Function(Track) onRadio;
+  final Future<void> Function() onRescan;
 
   String get _greeting {
     final h = DateTime.now().hour;
@@ -123,6 +130,11 @@ class HomeScreen extends StatelessWidget {
                     ],
                   ),
                 ),
+                IconButton(
+                  tooltip: 'rescan library',
+                  onPressed: onRescan,
+                  icon: Icon(Icons.refresh_rounded, size: 20, color: p.mute),
+                ),
                 PillButton(
                   icon: Icons.shuffle_rounded,
                   label: 'shuffle',
@@ -156,6 +168,7 @@ class HomeScreen extends StatelessWidget {
                     coverUrl: api.cover(a.id, a.hasCover),
                     size: 150,
                     onPlay: () => player.play(a.tracks.first, queue: tracks),
+                    onRadio: () => onRadio(a.tracks.first),
                   );
                 },
               ),

@@ -99,6 +99,27 @@ class Api {
         .toList(growable: false);
   }
 
+  Future<Map<String, dynamic>> scan() async {
+    final r = await _http
+        .post(Uri.parse('$base/api/scan'))
+        .timeout(const Duration(minutes: 30));
+    if (r.statusCode != 200) {
+      throw ApiException('scan → ${r.statusCode}');
+    }
+    return jsonDecode(r.body) as Map<String, dynamic>;
+  }
+
+  /// Incremental: computes embeddings only for tracks that lack one.
+  Future<Map<String, dynamic>> buildFeatures({int limit = 300}) async {
+    final r = await _http
+        .post(Uri.parse('$base/api/features/build?limit=$limit'))
+        .timeout(const Duration(minutes: 30));
+    if (r.statusCode != 200) {
+      throw ApiException('features → ${r.statusCode}');
+    }
+    return jsonDecode(r.body) as Map<String, dynamic>;
+  }
+
   Future<Map<String, dynamic>> health() async {
     final r = await _http
         .get(Uri.parse('$base/api/health'))
@@ -110,6 +131,19 @@ class Api {
   }
 
   Uri stream(int id) => Uri.parse('$base/api/tracks/$id/stream');
+
+  Future<List<Track>> similar(int id, {int n = 30}) async {
+    final r = await _http
+        .get(Uri.parse('$base/api/recs/similar/$id?n=$n'))
+        .timeout(const Duration(seconds: 20));
+    if (r.statusCode != 200) {
+      throw ApiException('similar → ${r.statusCode}');
+    }
+    final list = jsonDecode(r.body) as List<dynamic>;
+    return list
+        .map((e) => Track.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false);
+  }
 
   final Map<int, List<int>> _peaks = {};
 
