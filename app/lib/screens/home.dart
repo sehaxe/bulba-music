@@ -123,11 +123,11 @@ class HomeScreen extends StatelessWidget {
                     ],
                   ),
                 ),
-                BracketButton(
-                  'shuffle all',
-                  size: 13,
+                PillButton(
+                  icon: Icons.shuffle_rounded,
+                  label: 'shuffle',
                   onTap: tracks.isEmpty
-                      ? null
+                      ? () {}
                       : () => player.play(tracks.first, queue: tracks),
                 ),
               ],

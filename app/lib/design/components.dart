@@ -503,3 +503,58 @@ class _FrameTickerState extends State<FrameTicker>
   @override
   Widget build(BuildContext context) => widget.builder(context);
 }
+
+/// Small filled pill with an icon and an optional word. Replaces the bracket
+/// text buttons on screens that carry primary actions.
+class PillButton extends StatefulWidget {
+  const PillButton({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.accent = C.signal,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final Color accent;
+
+  @override
+  State<PillButton> createState() => _PillButtonState();
+}
+
+class _PillButtonState extends State<PillButton> {
+  bool _down = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _down = true),
+      onTapCancel: () => setState(() => _down = false),
+      onTapUp: (_) => setState(() => _down = false),
+      onTap: widget.onTap,
+      child: AnimatedScale(
+        scale: _down ? 0.96 : 1,
+        duration: const Duration(milliseconds: 110),
+        child: Container(
+          height: 34,
+          padding: const EdgeInsets.symmetric(horizontal: S.md),
+          decoration: BoxDecoration(
+            color: widget.accent.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(17),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(widget.icon, size: 17, color: widget.accent),
+              const SizedBox(width: 6),
+              Text(widget.label, style: T.label(p.ink)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
