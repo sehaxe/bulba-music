@@ -1,0 +1,137 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: 3.47.9
+  CARGO_TERM_COLOR: always
+
+jobs:
+  server:
+    name: server · test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+      - name: cargo test
+        working-directory: server
+        run: cargo test --all-targets
+      - name: cargo build --release
+        working-directory: server
+        run: cargo build --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-linux-x64
+          path: server/target/release/bulba-music-server
+          if-no-files-found: error
+
+  app:
+    name: app · analyze, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libgtk-3-dev libmpv-dev pkg-config
+
+      - name: pub get
+        working-directory: app
+        run: flutter pub get
+
+      - name: analyze
+        working-directory: app
+        run: flutter analyze
+
+      - name: test
+        working-directory: app
+        run: flutter test
+
+      - name: build linux
+        working-directory: app
+        run: flutter build linux --release
+
+      - name: pack linux
+        run: |
+          mkdir -p dist
+          cp -a app/build/linux/x64/release/bundle dist/bulba-music-linux
+          printf '#!/bin/sh\ncd "$(dirname "$0")" && exec ./bulba_music "$@"\n' \
+            > dist/bulba-music-linux/bulba-music.sh
+          chmod +x dist/bulba-music-linux/bulba-music.sh
+          tar czf dist/bulba-music-linux-x64.tar.gz -C dist bulba-music-linux
+          rm -rf dist/bulba-music-linux
+
+      - name: build apk
+        working-directory: app
+        run: flutter build apk --release --target-platform android-arm64
+
+      - name: pack apk
+        run: |
+          mkdir -p dist
+          cp app/build/app/outputs/flutter-apk/app-release.apk \
+             dist/bulba-music-arm64.apk
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: dist/bulba-music-linux-x64.tar.gz
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64
+          path: dist/bulba-music-arm64.apk
+          if-no-files-found: error
+
+  release:
+    name: release · ${{ github.ref_name }}
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [server, app]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: name assets with the tag
+        run: |
+          set -e
+          tag="${{ github.ref_name }}"
+          mkdir -p out
+          cp dist/linux-x64/bulba-music-linux-x64.tar.gz "out/bulba-music-${tag}-linux-x64.tar.gz"
+          cp dist/android-arm64/bulba-music-arm64.apk "out/bulba-music-${tag}-arm64.apk"
+          cp dist/server-linux-x64/bulba-music-server "out/bulba-music-server-${tag}-linux-x64"
+          ls -lh out
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

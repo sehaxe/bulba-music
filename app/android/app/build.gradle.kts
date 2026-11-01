@@ -27,6 +27,26 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // media_kit ships libmpv prebuilt for every ABI and Gradle would pack
+        // all of them: the phone only ever loads arm64-v8a, the rest was 13 MB
+        // of dead weight in the APK.
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // Only arm64 devices run this build; every other ABI libmpv ships
+            // is dead weight (13 MB).
+            excludes += listOf(
+                "lib/x86_64/**",
+                "lib/x86/**",
+                "lib/armeabi-v7a/**",
+                "lib/mips/**",
+                "lib/mips64/**",
+            )
+        }
     }
 
     buildTypes {
