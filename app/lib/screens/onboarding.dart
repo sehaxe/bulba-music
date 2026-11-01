@@ -275,19 +275,9 @@ class _Library extends StatelessWidget {
             ],
           ),
           const SizedBox(height: S.xl),
-          Row(
-            children: [
-              PillButton(
-                label: scanning ? 'сканирую…' : 'пересканировать',
-                icon: Icons.refresh_rounded,
-                onTap: scanning ? null : onScan,
-              ),
-            ],
-          ),
-          const SizedBox(height: S.md),
           Text(
-            'Если ноль — сервер запущен без папок. Флаг --library <путь> '
-            'или переменная BULBA_LIBRARY.',
+            'Сервер уже прочитал папку библиотеки. Дальше он обновляет её сам — '
+            'ничего сканировать с телефона не нужно.',
             style: T.micro(p.ash),
           ),
         ],

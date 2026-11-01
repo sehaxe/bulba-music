@@ -14,14 +14,22 @@ class TrackWaveform extends StatefulWidget {
     super.key,
     required this.api,
     required this.track,
-    required this.player,
+    required this.progress,
+    required this.onSeek,
     required this.accent,
+    required this.playing,
     this.height = 72,
   });
 
   final Api api;
   final Track track;
-  final PlayerController player;
+
+  /// Current position as a fraction, 0..1.
+  final double progress;
+
+  /// Called with the target fraction: tapping and dragging both end up here.
+  final void Function(double ratio) onSeek;
+  final bool playing;
   final Color accent;
   final double height;
 
@@ -75,30 +83,17 @@ class _TrackWaveformState extends State<TrackWaveform>
   Widget build(BuildContext context) {
     final p = Palette.of(context);
     final peaks = _peaks;
-    if (peaks == null) {
-      return SizedBox(height: widget.height);
-    }
-    if (peaks.isEmpty) {
-      return SizedBox(
-        height: widget.height,
-        child: Center(
-          child: Text('[ no waveform ]', style: T.micro(p.onRoomMute)),
-        ),
-      );
-    }
     return FrameTicker(
-      playing: widget.player.playing,
+      playing: widget.playing,
       builder: (context) => LayoutBuilder(
         builder: (context, box) {
-          // Take the pointer position the gesture hands us (already local to
-          // this detector) and measure the very same box by key. Converting a
-          // global point through findRenderObject() picked an ancestor, which
-          // is why the seek landed far from the cursor.
+          // The seek surface is drawn whether or not the peaks arrived: a
+          // failing peaks request must not make the player unseekable.
           void seek(Offset local) {
             final object = _barKey.currentContext?.findRenderObject();
             if (object is! RenderBox || object.size.width <= 0) return;
             final ratio = (local.dx / object.size.width).clamp(0.0, 1.0);
-            widget.player.seek(ratio);
+            widget.onSeek(ratio);
           }
 
           return GestureDetector(
@@ -106,20 +101,33 @@ class _TrackWaveformState extends State<TrackWaveform>
             behavior: HitTestBehavior.opaque,
             onTapDown: (d) => seek(d.localPosition),
             onHorizontalDragUpdate: (d) => seek(d.localPosition),
-            child: AnimatedBuilder(
-              animation: _reveal,
-              builder: (context, _) => ClipRect(
-                child: CustomPaint(
-                  size: Size(box.maxWidth, widget.height),
-                  painter: _WavePainter(
-                    peaks: peaks,
-                    progress: widget.player.progress,
-                    accent: widget.accent,
-                    base: p.onRoom.withValues(alpha: 0.18),
-                    reveal: Curves.easeOutCubic.transform(_reveal.value),
-                  ),
-                ),
-              ),
+            child: SizedBox(
+              height: widget.height,
+              width: double.infinity,
+              child: peaks == null || peaks.isEmpty
+                  ? Center(
+                      child: Container(
+                        height: 2,
+                        color: p.onRoomMute.withValues(alpha: 0.25),
+                      ),
+                    )
+                  : AnimatedBuilder(
+                      animation: _reveal,
+                      builder: (context, _) => ClipRect(
+                        child: CustomPaint(
+                          size: Size(box.maxWidth, widget.height),
+                          painter: _WavePainter(
+                            peaks: peaks,
+                            progress: widget.progress,
+                            accent: widget.accent,
+                            base: p.onRoom.withValues(alpha: 0.18),
+                            reveal: Curves.easeOutCubic.transform(
+                              _reveal.value,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
             ),
           );
         },

@@ -36,8 +36,14 @@ async fn main() -> Result<()> {
         i += 1;
     }
     if libraries.is_empty() {
-        let env = std::env::var("BULBA_LIBRARY").unwrap_or(format!("{home}/Music"));
+        // The library lives inside the project, untracked by git: one place to
+        // back up and one place the phone syncs from.
+        let env = std::env::var("BULBA_LIBRARY")
+            .unwrap_or_else(|_| format!("{}/bulba-music/library", home));
         libraries = env.split(':').map(PathBuf::from).collect();
+    }
+    for lib in &libraries {
+        std::fs::create_dir_all(lib).ok();
     }
     let mut ignores: Vec<String> = vec![
         "Telegram Desktop".into(),
@@ -92,6 +98,45 @@ async fn main() -> Result<()> {
     };
 
     tracing::info!("bulba music server on http://{addr}");
+    tracing::info!("library: {:?}", state.libraries);
+
+    // The library belongs to the server: it scans itself on start and then on a
+    // timer, so no client ever has to know about folders on disk.
+    {
+        let db = state.db.clone();
+        let roots = state.libraries.clone();
+        let ignores = state.ignores.clone();
+        tokio::spawn(async move {
+            loop {
+                let (db, roots, ignores) = (db.clone(), roots.clone(), ignores.clone());
+                let res = tokio::task::spawn_blocking(move || -> Result<scan::ScanReport> {
+                    let mut total = scan::ScanReport::default();
+                    for root in &roots {
+                        let r = scan::scan(&db, root, &ignores)?;
+                        total.scanned += r.scanned;
+                        total.masters_added += r.masters_added;
+                        total.tracks_created += r.tracks_created;
+                        total.masters_removed += r.masters_removed;
+                        total.errors.extend(r.errors);
+                        total.rev = total.rev.max(r.rev);
+                    }
+                    Ok(total)
+                })
+                .await;
+                match res {
+                    Ok(Ok(r)) => tracing::info!(
+                        "library scan: {} files, +{} masters, +{} tracks",
+                        r.scanned,
+                        r.masters_added,
+                        r.tracks_created
+                    ),
+                    Ok(Err(e)) => tracing::warn!("library scan failed: {e}"),
+                    Err(e) => tracing::warn!("library scan task: {e}"),
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+            }
+        });
+    }
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, router(state)).await?;
     Ok(())

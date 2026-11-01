@@ -55,6 +55,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/me", get(whoami))
         .route("/api/library/normalize", post(normalize_names))
         .route("/api/library/tree", post(library_tree))
+        // Human links: what you paste into a phone over Tailscale.
+        .route("/a/{id}", get(artist_html))
+        .route("/al/{id}", get(album_html))
         .with_state(state)
 }
 
@@ -481,11 +484,54 @@ async fn remove_artist_like(
     Ok(Json(json!({"liked": false})))
 }
 
+async fn artist_html(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    headers: axum::http::HeaderMap,
+) -> Result<axum::response::Html<String>, ApiError> {
+    let db = st.db.clone();
+    let host = host_of(&headers, &st);
+    let page = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<String>> {
+        let conn = db.open()?;
+        crate::pages::artist_page(&conn, id, &host)
+    })
+    .await??;
+    page.map(axum::response::Html)
+        .ok_or_else(|| ApiError::not_found("artist"))
+}
+
+async fn album_html(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    headers: axum::http::HeaderMap,
+) -> Result<axum::response::Html<String>, ApiError> {
+    let db = st.db.clone();
+    let host = host_of(&headers, &st);
+    let page = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<String>> {
+        let conn = db.open()?;
+        crate::pages::album_page(&conn, id, &host)
+    })
+    .await??;
+    page.map(axum::response::Html)
+        .ok_or_else(|| ApiError::not_found("album"))
+}
+
+/// The host the client used, so links in the page keep working from a phone.
+fn host_of(headers: &axum::http::HeaderMap, _st: &AppState) -> String {
+    headers
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("127.0.0.1:8422")
+        .to_string()
+}
+
 #[derive(Debug, Deserialize)]
 struct TreeQuery {
     #[serde(default)]
     apply: bool,
     limit: Option<usize>,
+    /// Target root; defaults to the first configured library.
+    root: Option<String>,
 }
 
 /// Reorganises the whole library into Artist/Album (Year)/NN - Title.ext.
@@ -494,12 +540,14 @@ async fn library_tree(
     Query(q): Query<TreeQuery>,
 ) -> Result<Json<crate::normalize::TreeReport>, ApiError> {
     let db = st.db.clone();
-    let root = st
-        .libraries
-        .first()
-        .cloned()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("bulba");
+    // The first library root is the library; it already is the folder that
+    // holds Artist/Album/…, so nothing is appended to it.
+    let root = q
+        .root
+        .clone()
+        .map(std::path::PathBuf::from)
+        .or_else(|| st.libraries.first().cloned())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
     let limit = q.limit.unwrap_or(usize::MAX);
     let report = tokio::task::spawn_blocking(
         move || -> anyhow::Result<crate::normalize::TreeReport> {

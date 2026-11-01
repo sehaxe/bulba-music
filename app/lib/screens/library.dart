@@ -295,7 +295,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Widget _row(BuildContext context, dynamic item, int i) {
-    final p = Palette.of(context);
     if (item is ArtistSummary) {
       return _IndexRow(
         key: ValueKey('artist-${item.id}'),

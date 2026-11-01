@@ -6,6 +6,7 @@ pub mod features;
 pub mod index;
 pub mod range;
 pub mod normalize;
+pub mod pages;
 pub mod scan;
 pub mod search;
 pub mod stats;

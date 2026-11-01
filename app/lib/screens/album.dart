@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../api/client.dart';
 import '../design/components.dart';
@@ -148,6 +149,11 @@ class _AlbumScreenState extends State<AlbumScreen> {
                               ),
                               const SizedBox(width: S.sm),
                               _Heart(liked: _liked, onTap: _toggleLike),
+                              const SizedBox(width: S.sm),
+                              _CopyLink(
+                                path: '/al/${widget.albumId}',
+                                base: widget.api.base,
+                              ),
                             ],
                           ),
                         ],
@@ -189,6 +195,62 @@ class _AlbumScreenState extends State<AlbumScreen> {
     final d = Duration(milliseconds: ms);
     if (d.inHours > 0) return '${d.inHours} ч ${d.inMinutes % 60} мин';
     return '${d.inMinutes} мин';
+  }
+}
+
+class _CopyLink extends StatefulWidget {
+  const _CopyLink({required this.path, required this.base});
+  final String path;
+  final String base;
+
+  @override
+  State<_CopyLink> createState() => _CopyLinkState();
+}
+
+class _CopyLinkState extends State<_CopyLink> {
+  bool _copied = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return GestureDetector(
+      onTap: () async {
+        await Clipboard.setData(
+          ClipboardData(text: '${widget.base}${widget.path}'),
+        );
+        if (!mounted) return;
+        setState(() => _copied = true);
+        await Future<void>.delayed(const Duration(seconds: 2));
+        if (mounted) setState(() => _copied = false);
+      },
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: p.soft,
+            border: Border.all(color: p.hairline),
+            borderRadius: BorderRadius.circular(9),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                _copied ? Icons.check_rounded : Icons.link_rounded,
+                size: 15,
+                color: _copied ? C.signal : p.mute,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                _copied ? 'скопировано' : 'ссылка',
+                style: T.label(_copied ? C.signal : p.mute),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 

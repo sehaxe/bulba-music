@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../api/client.dart';
 import '../design/components.dart';
 import '../design/tokens.dart';
 import '../player/controller.dart';
 import '../player/likes.dart';
-import '../widgets/track_row.dart';
 
 /// An artist is a page, not a filter: their albums in release order, what you
 /// actually replay, and a heart that means "I follow this".
@@ -240,6 +240,64 @@ class _ArtistScreenState extends State<ArtistScreen> {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _LinkButton extends StatefulWidget {
+  const _LinkButton({required this.path, required this.base});
+  final String path;
+  final String base;
+
+  @override
+  State<_LinkButton> createState() => _LinkButtonState();
+}
+
+class _LinkButtonState extends State<_LinkButton> {
+  bool _copied = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return GestureDetector(
+      onTap: () async {
+        // The link points at the server, so it works from any device on the
+        // same network (or Tailscale) without the app installed.
+        await Clipboard.setData(
+          ClipboardData(text: '${widget.base}${widget.path}'),
+        );
+        if (!mounted) return;
+        setState(() => _copied = true);
+        await Future<void>.delayed(const Duration(seconds: 2));
+        if (mounted) setState(() => _copied = false);
+      },
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: p.soft,
+            border: Border.all(color: p.hairline),
+            borderRadius: BorderRadius.circular(9),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                _copied ? Icons.check_rounded : Icons.link_rounded,
+                size: 15,
+                color: _copied ? C.signal : p.mute,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                _copied ? 'скопировано' : 'ссылка',
+                style: T.label(_copied ? C.signal : p.mute),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

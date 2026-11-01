@@ -139,7 +139,9 @@ class PlayerScreen extends StatelessWidget {
                                               child: TrackWaveform(
                                                 api: api,
                                                 track: t,
-                                                player: player,
+                                                progress: player.progress,
+                                                playing: player.playing,
+                                                onSeek: (r) => player.seek(r),
                                                 accent: accent,
                                                 height: wide ? 48 : 40,
                                               ),

@@ -30,10 +30,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   String? _token;
-  String _who = 'локальный';
   Map<String, dynamic>? _info;
-  bool _scanning = false;
-  bool _embedding = false;
   bool _renaming = false;
   String _embedNote = '';
   Map<String, dynamic>? _renamePreview;
@@ -53,7 +50,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       widget.api.token = _token;
       await widget.prefs.setToken(_token);
       if (!mounted) return;
-      setState(() => _who = (session['name'] ?? '') as String);
       await _showPhrase(phrase);
     } catch (e) {
       if (mounted) setState(() => _embedNote = 'ошибка: $e');
@@ -168,7 +164,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       widget.api.token = _token;
       await widget.prefs.setToken(_token);
       if (!mounted) return;
-      setState(() => _who = (session['name'] ?? '') as String);
       await _load();
     } catch (e) {
       if (mounted) {
@@ -182,13 +177,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final info = await widget.api.info();
       if (mounted) setState(() => _info = info);
     } catch (_) {}
-  }
-
-  Future<void> _rescan() async {
-    setState(() => _scanning = true);
-    await widget.onRescan();
-    await _load();
-    if (mounted) setState(() => _scanning = false);
   }
 
   Future<void> _previewRename() async {
@@ -215,23 +203,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       setState(() => _embedNote = 'ошибка: $e');
     }
     if (mounted) setState(() => _renaming = false);
-  }
-
-  Future<void> _buildFeatures() async {
-    setState(() {
-      _embedding = true;
-      _embedNote = 'считаю признаки…';
-    });
-    try {
-      final out = await widget.api.buildFeatures(limit: 500);
-      final computed = out['computed'] ?? 0;
-      final remaining = out['remaining'] ?? 0;
-      setState(() => _embedNote = 'готово: $computed, осталось $remaining');
-      await _load();
-    } catch (e) {
-      setState(() => _embedNote = 'ошибка: $e');
-    }
-    if (mounted) setState(() => _embedding = false);
   }
 
   @override
@@ -279,20 +250,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 style: T.caption(p.ash),
               ),
             const SizedBox(height: S.md),
-            Row(
-              children: [
-                PillButton(
-                  icon: Icons.refresh_rounded,
-                  label: _scanning ? 'сканирую…' : 'пересканировать',
-                  onTap: _scanning ? null : _rescan,
-                ),
-                const SizedBox(width: S.md),
-                PillButton(
-                  icon: Icons.auto_awesome_rounded,
-                  label: _embedding ? 'считаю…' : 'пересчитать признаки',
-                  onTap: _embedding ? null : _buildFeatures,
-                ),
-              ],
+            Text(
+              'Сервер сам читает папку библиотеки при старте и каждые пять минут. '
+              'Клиент не сканирует диск никогда — с телефона он о папках и не знает.',
+              style: T.caption(p.mute),
             ),
             if (_embedNote.isNotEmpty) ...[
               const SizedBox(height: S.sm),

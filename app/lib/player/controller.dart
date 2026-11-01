@@ -6,12 +6,39 @@ import 'package:media_kit/media_kit.dart' show Media, Player;
 import '../api/client.dart';
 import 'signals.dart';
 
+class _PendingSeek {
+  _PendingSeek({
+    required this.target,
+    required this.corrections,
+    required this.nominal,
+  });
+  final int target;
+  final int corrections;
+  final int nominal;
+}
+
 /// Owns the audio deck and the queue. The transition engine will sit between
 /// this object and the output device; for now it opens one stream at a time and
 /// reports its clock.
 class PlayerController extends ChangeNotifier {
   PlayerController(this.api) : signals = SignalLog(api) {
     _player.stream.position.listen((p) {
+      // A seek can land somewhere other than asked (some files carry wrong
+      // duration headers). Correct once, quietly, instead of leaving the
+      // listener far from where they tapped.
+      final pending = _pendingSeek;
+      if (pending != null) {
+        final delta = p.inMilliseconds - pending.target;
+        _pendingSeek = null;
+        if (delta.abs() > 1200 && pending.corrections < 1) {
+          _pendingSeek = _PendingSeek(
+            target: pending.target - delta,
+            corrections: pending.corrections + 1,
+            nominal: pending.target,
+          );
+          _player.seek(Duration(milliseconds: _pendingSeek!.target));
+        }
+      }
       _position = p;
       _anchor = p;
       _anchorAt = DateTime.now();
@@ -58,6 +85,7 @@ class PlayerController extends ChangeNotifier {
   Duration _duration = Duration.zero;
   bool _playing = false;
   double _volume = 1.0;
+  _PendingSeek? _pendingSeek;
 
   /// Position extrapolated between stream ticks, so the progress bar moves at
   /// the display refresh rate instead of the audio backend's reporting rate.
@@ -249,9 +277,19 @@ class PlayerController extends ChangeNotifier {
   Future<void> seek(double ratio) async {
     final total = _duration.inMilliseconds;
     if (total <= 0) return;
-    await _player.seek(
-      Duration(milliseconds: (total * ratio.clamp(0.0, 1.0)).round()),
+    final target = (total * ratio.clamp(0.0, 1.0)).round();
+    // Move the cursor and the clock at once: waiting for the decoder's next
+    // tick made the player feel like it ignored the click.
+    _position = Duration(milliseconds: target);
+    _anchor = _position;
+    _anchorAt = DateTime.now();
+    _pendingSeek = _PendingSeek(
+      target: target,
+      corrections: 0,
+      nominal: target,
     );
+    notifyListeners();
+    await _player.seek(Duration(milliseconds: target));
   }
 
   @override

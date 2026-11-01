@@ -28,3 +28,6 @@ incoming/
 .idea/
 *.swp
 .DS_Store
+
+# the music itself lives here, but never in git
+/library/

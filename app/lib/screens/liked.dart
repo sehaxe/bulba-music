@@ -121,6 +121,14 @@ class _LikedScreenState extends State<LikedScreen> {
                       coverUrl: widget.api.cover(t.albumId, t.hasCover),
                       onTap: () => widget.player.play(t, queue: tracks),
                       onRadio: () => widget.onRadio(t),
+                      onMenu: () => showTrackMenu(
+                        context,
+                        track: t,
+                        api: widget.api,
+                        player: widget.player,
+                        likes: widget.likes,
+                        onRadio: () => widget.onRadio(t),
+                      ),
                       liked: true,
                       onLike: () => widget.likes.toggle(t),
                     );
