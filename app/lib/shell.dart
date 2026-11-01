@@ -7,11 +7,12 @@ import 'design/accent.dart';
 import 'design/components.dart';
 import 'design/tokens.dart';
 import 'player/controller.dart';
+import 'player/likes.dart';
 import 'screens/collection.dart';
 import 'screens/home.dart';
 import 'screens/library.dart';
 import 'screens/player_screen.dart';
-import 'screens/radio.dart';
+import 'screens/liked.dart';
 import 'screens/search.dart';
 import 'screens/settings.dart';
 import 'widgets/nav.dart';
@@ -23,9 +24,11 @@ class Shell extends StatefulWidget {
     required this.api,
     required this.player,
     required this.themeMode,
+    required this.likes,
   });
   final Api api;
   final PlayerController player;
+  final LikesStore likes;
   final ValueNotifier<ThemeMode> themeMode;
 
   @override
@@ -46,6 +49,7 @@ class _ShellState extends State<Shell> {
     super.initState();
     widget.player.addListener(_onPlayer);
     _load();
+    widget.likes.load();
   }
 
   @override
@@ -152,6 +156,7 @@ class _ShellState extends State<Shell> {
         builder: (_) => PlayerScreen(
           player: widget.player,
           api: widget.api,
+          likes: widget.likes,
           onRadio: _startRadio,
         ),
       ),
@@ -275,6 +280,7 @@ class _ShellState extends State<Shell> {
         player: widget.player,
         onRadio: _startRadio,
         onBack: () => setState(() => _collection = null),
+        likes: widget.likes,
         accent: _accent,
       );
     }
@@ -294,6 +300,8 @@ class _ShellState extends State<Shell> {
           api: widget.api,
           player: widget.player,
           onRadio: _startRadio,
+          onOpen: (collection) => setState(() => _collection = collection),
+          likes: widget.likes,
         );
       case 2:
         return LibraryScreen(
@@ -303,10 +311,18 @@ class _ShellState extends State<Shell> {
           onRadio: _startRadio,
         );
       case 3:
-        return RadioScreen(
-          player: widget.player,
+        return LikedScreen(
           api: widget.api,
+          player: widget.player,
+          likes: widget.likes,
           onRadio: _startRadio,
+          onOpenCollection: (tracks, title) => setState(
+            () => _collection = Collection(
+              title: title,
+              subtitle: '${tracks.length} треков',
+              tracks: tracks,
+            ),
+          ),
         );
       default:
         return SettingsScreen(

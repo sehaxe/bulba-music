@@ -26,13 +26,16 @@ pub fn router(state: AppState) -> Router {
         .route("/api/tracks", get(list_tracks))
         .route("/api/tracks/{id}", get(get_track))
         .route("/api/tracks/{id}/stream", get(stream))
-        .route("/api/search", get(search))
+        .route("/api/search", get(search_handler))
         .route("/api/albums/{id}/cover", get(cover))
         .route("/api/tracks/{id}/peaks", get(peaks))
         .route("/api/features/build", post(build_features))
         .route("/api/recs/similar/{id}", get(similar))
         .route("/api/recs/home", get(home_mixes))
         .route("/api/recs/daily", get(daily_mixes))
+        .route("/api/likes", get(list_likes))
+        .route("/api/likes/ids", get(like_ids))
+        .route("/api/likes/{id}", post(add_like).delete(remove_like))
         .route("/api/manifest", get(manifest))
         .route("/api/events", post(record_events))
         .with_state(state)
@@ -223,40 +226,19 @@ struct SearchQuery {
     limit: Option<i64>,
 }
 
-async fn search(
+async fn search_handler(
     State(st): State<AppState>,
     Query(sq): Query<SearchQuery>,
-) -> Result<Json<Vec<Track>>, ApiError> {
-    // Wrap each term in quotes so user input cannot inject FTS operators.
-    let expression: String = sq
-        .q
-        .split_whitespace()
-        .map(|t| format!("\"{}\"", t.replace('"', "")))
-        .collect::<Vec<_>>()
-        .join(" ");
-    if expression.is_empty() {
-        return Ok(Json(vec![]));
-    }
-    let limit = sq.limit.unwrap_or(50).clamp(1, 500);
-    let rows = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Track>> {
-        let conn = st.db.open()?;
-        let mut stmt = conn.prepare(&format!(
-            "SELECT {} FROM v_track v
-             JOIN track_fts f ON f.rowid = v.id
-             WHERE track_fts MATCH ?1
-             ORDER BY rank
-             LIMIT ?2",
-            TRACK_COLUMNS
-                .split(',')
-                .map(|c| format!("v.{}", c.trim()))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ))?;
-        let rows = stmt.query_map([&expression, &limit.to_string()], map_track)?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
-    })
-    .await??;
-    Ok(Json(rows))
+) -> Result<Json<crate::search::SearchResults>, ApiError> {
+    let limit = sq.limit.unwrap_or(50).clamp(1, 200);
+    let db = st.db.clone();
+    let results =
+        tokio::task::spawn_blocking(move || -> anyhow::Result<crate::search::SearchResults> {
+            let conn = db.open()?;
+            crate::search::search(&conn, &sq.q, limit)
+        })
+        .await??;
+    Ok(Json(results))
 }
 
 #[derive(Debug, Deserialize)]
@@ -423,8 +405,9 @@ async fn build_features(
                         ],
                     )?;
                     conn.execute(
-                        "UPDATE track SET tempo_bpm=?1, brightness=?2 WHERE id=?3",
-                        rusqlite::params![fp.tempo_bpm, fp.brightness, id],
+                        "UPDATE track SET tempo_bpm=?1, brightness=?2, energy=?3, mode=?4
+                         WHERE id=?5",
+                        rusqlite::params![fp.tempo_bpm, fp.brightness, fp.energy, fp.mode, id],
                     )?;
                     done += 1;
                 }
@@ -653,7 +636,7 @@ async fn daily_mixes(State(st): State<AppState>) -> Result<Json<Vec<Mix>>, ApiEr
                 continue;
             }
             out.push(Mix {
-                id: format!("day-{}", m.slot),
+                id: m.id,
                 title: m.title,
                 note: m.note,
                 tracks,
@@ -663,6 +646,100 @@ async fn daily_mixes(State(st): State<AppState>) -> Result<Json<Vec<Mix>>, ApiEr
     })
     .await??;
     Ok(Json(mixes))
+}
+
+fn current_user(conn: &rusqlite::Connection) -> anyhow::Result<i64> {
+    crate::db::default_user(conn)
+}
+
+async fn list_likes(State(st): State<AppState>) -> Result<Json<Vec<Track>>, ApiError> {
+    let db = st.db.clone();
+    let tracks = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Track>> {
+        let conn = db.open()?;
+        let user = current_user(&conn)?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {TRACK_COLUMNS} FROM v_track t
+             JOIN track_like l ON l.track_id = t.id
+             WHERE l.user_id = ?1
+             ORDER BY l.ts DESC"
+        ))?;
+        let rows = stmt.query_map([user], map_track)?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    })
+    .await??;
+    Ok(Json(tracks))
+}
+
+async fn like_ids(State(st): State<AppState>) -> Result<Json<Vec<i64>>, ApiError> {
+    let db = st.db.clone();
+    let ids = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<i64>> {
+        let conn = db.open()?;
+        let user = current_user(&conn)?;
+        let mut stmt = conn.prepare("SELECT track_id FROM track_like WHERE user_id = ?1")?;
+        let rows = stmt.query_map([user], |r| r.get(0))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    })
+    .await??;
+    Ok(Json(ids))
+}
+
+async fn add_like(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    let ok = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let conn = db.open()?;
+        let user = current_user(&conn)?;
+        let exists: i64 = conn.query_row("SELECT count(*) FROM track WHERE id=?1", [id], |r| {
+            r.get(0)
+        })?;
+        if exists == 0 {
+            return Ok(false);
+        }
+        conn.execute(
+            "INSERT INTO track_like(user_id, track_id, ts) VALUES(?1,?2,unixepoch())
+             ON CONFLICT(user_id, track_id) DO NOTHING",
+            rusqlite::params![user, id],
+        )?;
+        // A like is the strongest positive signal we get; log it as an event so
+        // the taste model sees it even if the track is never played again.
+        if let Some(track) = conn
+            .query_row("SELECT id FROM track WHERE id=?1", [id], |r| r.get::<_, i64>(0))
+            .ok()
+        {
+            conn.execute(
+                "INSERT INTO play_event(ts,user_id,track_id,session_id,event,position_ms,
+                    position_ratio,source,device,offline,quality,client_id)
+                 VALUES(unixepoch(),?1,?2,0,4,0,0,0,3,0,0,'like')",
+                rusqlite::params![user, track],
+            )?;
+        }
+        Ok(true)
+    })
+    .await??;
+    if !ok {
+        return Err(ApiError::not_found("track"));
+    }
+    Ok(Json(json!({"liked": true})))
+}
+
+async fn remove_like(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let conn = db.open()?;
+        let user = current_user(&conn)?;
+        conn.execute(
+            "DELETE FROM track_like WHERE user_id=?1 AND track_id=?2",
+            rusqlite::params![user, id],
+        )?;
+        Ok(())
+    })
+    .await??;
+    Ok(Json(json!({"liked": false})))
 }
 
 #[derive(Debug, Deserialize)]
@@ -711,8 +788,9 @@ async fn similar(
                     ],
                 )?;
                 conn.execute(
-                    "UPDATE track SET tempo_bpm=?1, brightness=?2 WHERE id=?3",
-                    rusqlite::params![fp.tempo_bpm, fp.brightness, id],
+                    "UPDATE track SET tempo_bpm=?1, brightness=?2, energy=?3, mode=?4
+                     WHERE id=?5",
+                    rusqlite::params![fp.tempo_bpm, fp.brightness, fp.energy, fp.mode, id],
                 )?;
                 fp.vec
             }

@@ -4,6 +4,7 @@ import '../api/client.dart';
 import '../design/components.dart';
 import '../design/tokens.dart';
 import '../player/controller.dart';
+import '../player/likes.dart';
 import '../widgets/track_row.dart';
 
 /// Opens when a mix or an album is pressed: the list first, the play button
@@ -34,6 +35,7 @@ class CollectionView extends StatelessWidget {
     required this.player,
     required this.onRadio,
     required this.onBack,
+    required this.likes,
     this.accent = C.signal,
   });
 
@@ -42,6 +44,7 @@ class CollectionView extends StatelessWidget {
   final PlayerController player;
   final void Function(Track) onRadio;
   final VoidCallback onBack;
+  final LikesStore likes;
   final Color accent;
 
   @override
@@ -61,22 +64,24 @@ class CollectionView extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(S.lg, S.sm, S.lg, S.sm),
-          child: Row(
-            children: [
-              _BackButton(onTap: onBack),
-              const Spacer(),
-            ],
+        SizedBox(
+          height: 56,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: S.sm),
+            child: Row(
+              children: [
+                _BackButton(onTap: onBack),
+                const Spacer(),
+              ],
+            ),
           ),
         ),
-        Hr(color: p.hairline),
         Expanded(
           child: ListView(
             padding: const EdgeInsets.only(bottom: S.xxl),
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(S.xl, 0, S.xl, S.lg),
+                padding: const EdgeInsets.fromLTRB(S.xl, S.xl, S.xl, S.xl),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
@@ -176,22 +181,37 @@ class _Mosaic extends StatelessWidget {
   }
 }
 
-class _BackButton extends StatelessWidget {
+class _BackButton extends StatefulWidget {
   const _BackButton({required this.onTap});
   final VoidCallback onTap;
 
   @override
+  State<_BackButton> createState() => _BackButtonState();
+}
+
+class _BackButtonState extends State<_BackButton> {
+  bool _hover = false;
+
+  @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: Row(
-        children: [
-          Icon(Icons.arrow_back_rounded, size: 20, color: p.ink),
-          const SizedBox(width: 6),
-          Text('назад', style: T.label(p.ink)),
-        ],
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          width: 38,
+          height: 38,
+          decoration: BoxDecoration(
+            color: _hover ? p.card : Colors.transparent,
+            shape: BoxShape.circle,
+          ),
+          child: Icon(Icons.arrow_back_rounded, size: 20, color: p.ink),
+        ),
       ),
     );
   }

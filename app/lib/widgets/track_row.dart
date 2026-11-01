@@ -14,6 +14,8 @@ class TrackRow extends StatefulWidget {
     this.onRadio,
     this.showCover = true,
     this.index,
+    this.liked = false,
+    this.onLike,
   });
 
   final Track track;
@@ -23,6 +25,8 @@ class TrackRow extends StatefulWidget {
   final VoidCallback? onRadio;
   final bool showCover;
   final int? index;
+  final bool liked;
+  final VoidCallback? onLike;
 
   @override
   State<TrackRow> createState() => _TrackRowState();
@@ -128,6 +132,30 @@ class _TrackRowState extends State<TrackRow> {
                   style: T.caption(p.mute),
                 ),
               ),
+              if (widget.onLike != null) ...[
+                const SizedBox(width: S.xs),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: widget.onLike,
+                  child: SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: AnimatedScale(
+                      scale: widget.liked ? 1.0 : 0.92,
+                      duration: const Duration(milliseconds: 140),
+                      child: Icon(
+                        widget.liked
+                            ? Icons.favorite_rounded
+                            : Icons.favorite_border_rounded,
+                        size: 17,
+                        color: widget.liked
+                            ? C.signal
+                            : (_hover ? p.mute : Colors.transparent),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

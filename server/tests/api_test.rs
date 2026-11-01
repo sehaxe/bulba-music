@@ -235,3 +235,68 @@ async fn tailscale_user_outside_allowlist_is_forbidden() {
     // hello@example.com is not in the allowlist, so writes are rejected.
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn like_roundtrip_and_taste_signal() {
+    let fx = fixture();
+    let resp = router(fx.state.clone())
+        .oneshot(
+            Request::post(format!("/api/likes/{}", fx.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = router(fx.state.clone())
+        .oneshot(Request::get("/api/likes/ids").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let ids: Vec<i64> = serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    assert_eq!(ids, vec![fx.id]);
+
+    let resp = router(fx.state.clone())
+        .oneshot(Request::get("/api/likes").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let tracks: Vec<serde_json::Value> =
+        serde_json::from_slice(&body_bytes(resp).await).unwrap();
+    assert_eq!(tracks.len(), 1);
+    assert_eq!(tracks[0]["id"], fx.id);
+
+    // A like is also logged as an event so the taste model sees it.
+    let conn = fx.state.db.open().unwrap();
+    let events: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM play_event WHERE event=4 AND client_id='like'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(events, 1);
+
+    let resp = router(fx.state)
+        .oneshot(
+            Request::delete(format!("/api/likes/{}", fx.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn liking_a_missing_track_is_404() {
+    let fx = fixture();
+    let resp = router(fx.state)
+        .oneshot(
+            Request::post("/api/likes/9999")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}

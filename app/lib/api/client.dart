@@ -45,7 +45,7 @@ class Track {
     artist: (j['artist'] ?? '') as String,
     album: (j['album'] ?? '') as String,
     albumId: (j['album_id'] ?? 0) as int,
-    hasCover: (j['has_cover'] ?? false) as bool,
+    hasCover: j['has_cover'] == true || j['has_cover'] == 1,
     year: j['year'] as int?,
     disc: j['disc'] as int?,
     trackNo: j['track_no'] as int?,
@@ -72,6 +72,80 @@ class Track {
     final br = bitrate;
     return br != null && br > 0 ? '$br' : c;
   }
+}
+
+class SearchAlbum {
+  const SearchAlbum({
+    required this.id,
+    required this.title,
+    required this.artist,
+    required this.tracks,
+    this.year,
+    this.hasCover = false,
+  });
+  final int id;
+  final String title;
+  final String artist;
+  final int tracks;
+  final int? year;
+  final bool hasCover;
+
+  factory SearchAlbum.fromJson(Map<String, dynamic> j) => SearchAlbum(
+    id: j['id'] as int,
+    title: (j['title'] ?? '') as String,
+    artist: (j['artist'] ?? '') as String,
+    tracks: (j['tracks'] ?? 0) as int,
+    year: j['year'] as int?,
+    hasCover: j['has_cover'] == true || j['has_cover'] == 1,
+  );
+}
+
+class SearchArtist {
+  const SearchArtist({
+    required this.id,
+    required this.name,
+    required this.albums,
+    required this.tracks,
+  });
+  final int id;
+  final String name;
+  final int albums;
+  final int tracks;
+
+  factory SearchArtist.fromJson(Map<String, dynamic> j) => SearchArtist(
+    id: j['id'] as int,
+    name: (j['name'] ?? '') as String,
+    albums: (j['albums'] ?? 0) as int,
+    tracks: (j['tracks'] ?? 0) as int,
+  );
+}
+
+class SearchResults {
+  const SearchResults({
+    required this.tracks,
+    required this.albums,
+    required this.artists,
+    required this.query,
+  });
+  final List<Track> tracks;
+  final List<SearchAlbum> albums;
+  final List<SearchArtist> artists;
+  final String query;
+
+  bool get isEmpty => tracks.isEmpty && albums.isEmpty && artists.isEmpty;
+
+  factory SearchResults.fromJson(Map<String, dynamic> j) => SearchResults(
+    tracks: (j['tracks'] as List<dynamic>? ?? [])
+        .map((e) => Track.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false),
+    albums: (j['albums'] as List<dynamic>? ?? [])
+        .map((e) => SearchAlbum.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false),
+    artists: (j['artists'] as List<dynamic>? ?? [])
+        .map((e) => SearchArtist.fromJson(e as Map<String, dynamic>))
+        .toList(growable: false),
+    query: (j['query'] ?? '') as String,
+  );
 }
 
 class Mix {
@@ -168,7 +242,7 @@ class Api {
     }
   }
 
-  Future<List<Track>> search(String query, {int limit = 60}) async {
+  Future<SearchResults> search(String query, {int limit = 60}) async {
     final r = await _http
         .get(
           Uri.parse(
@@ -179,10 +253,40 @@ class Api {
     if (r.statusCode != 200) {
       throw ApiException('search → ${r.statusCode}');
     }
+    return SearchResults.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  Future<List<Track>> likes() async {
+    final r = await _http
+        .get(Uri.parse('$base/api/likes'))
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) throw ApiException('likes → ${r.statusCode}');
     final list = jsonDecode(r.body) as List<dynamic>;
     return list
         .map((e) => Track.fromJson(e as Map<String, dynamic>))
         .toList(growable: false);
+  }
+
+  Future<List<int>> likeIds() async {
+    final r = await _http
+        .get(Uri.parse('$base/api/likes/ids'))
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) throw ApiException('like ids → ${r.statusCode}');
+    return (jsonDecode(r.body) as List<dynamic>).cast<int>();
+  }
+
+  Future<void> like(int id) async {
+    final r = await _http
+        .post(Uri.parse('$base/api/likes/$id'))
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) throw ApiException('like → ${r.statusCode}');
+  }
+
+  Future<void> unlike(int id) async {
+    final r = await _http
+        .delete(Uri.parse('$base/api/likes/$id'))
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) throw ApiException('unlike → ${r.statusCode}');
   }
 
   Future<List<Mix>> dailyMixes() async {

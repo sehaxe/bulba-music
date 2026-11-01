@@ -34,6 +34,8 @@ impl Db {
         let _ = conn.execute("ALTER TABLE album ADD COLUMN cover_path TEXT", []);
         let _ = conn.execute("ALTER TABLE track ADD COLUMN tempo_bpm REAL", []);
         let _ = conn.execute("ALTER TABLE track ADD COLUMN brightness REAL", []);
+        let _ = conn.execute("ALTER TABLE track ADD COLUMN energy REAL", []);
+        let _ = conn.execute("ALTER TABLE track ADD COLUMN mode REAL", []);
         Ok(())
     }
 }
@@ -96,6 +98,8 @@ CREATE TABLE IF NOT EXISTS track (
   loudness_db REAL,
   tempo_bpm   REAL,
   brightness  REAL,
+  energy      REAL,
+  mode        REAL,
   rev         INTEGER NOT NULL,
   created_at  INTEGER NOT NULL
 );
@@ -126,6 +130,29 @@ CREATE TABLE IF NOT EXISTS embed (
   dim      INTEGER NOT NULL,
   vec      BLOB NOT NULL,
   PRIMARY KEY (model, track_id)
+);
+
+CREATE TABLE IF NOT EXISTS track_like (
+  user_id  INTEGER NOT NULL REFERENCES user(id),
+  track_id INTEGER NOT NULL REFERENCES track(id),
+  ts       INTEGER NOT NULL,
+  PRIMARY KEY (user_id, track_id)
+);
+
+CREATE TABLE IF NOT EXISTS playlist (
+  id         INTEGER PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES user(id),
+  name       TEXT NOT NULL,
+  norm       TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE (user_id, norm)
+);
+
+CREATE TABLE IF NOT EXISTS playlist_track (
+  playlist_id INTEGER NOT NULL REFERENCES playlist(id) ON DELETE CASCADE,
+  track_id    INTEGER NOT NULL REFERENCES track(id),
+  position    INTEGER NOT NULL,
+  PRIMARY KEY (playlist_id, track_id)
 );
 
 CREATE TABLE IF NOT EXISTS play_event (

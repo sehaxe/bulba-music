@@ -8,6 +8,7 @@ import 'package:media_kit/media_kit.dart' show MediaKit;
 import 'api/client.dart';
 import 'design/tokens.dart';
 import 'player/controller.dart';
+import 'player/likes.dart';
 import 'shell.dart';
 
 /// Set with `--dart-define=SHOT=/path.png` to dump the first frame to a file.
@@ -52,6 +53,7 @@ class _BulbaAppState extends State<BulbaApp> {
     ),
   );
   late final PlayerController player = PlayerController(api);
+  late final LikesStore likes = LikesStore(api);
 
   @override
   void initState() {
@@ -115,7 +117,12 @@ class _BulbaAppState extends State<BulbaApp> {
           theme: _theme(Palette.light, Brightness.light),
           darkTheme: _theme(Palette.inkNight, Brightness.dark),
           themeMode: mode,
-          home: Shell(api: api, player: player, themeMode: themeMode),
+          home: Shell(
+            api: api,
+            player: player,
+            likes: likes,
+            themeMode: themeMode,
+          ),
         ),
       ),
     );

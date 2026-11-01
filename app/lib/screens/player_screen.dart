@@ -8,6 +8,7 @@ import '../design/accent.dart';
 import '../design/components.dart';
 import '../design/tokens.dart';
 import '../player/controller.dart';
+import '../player/likes.dart';
 import '../widgets/waveform.dart';
 
 class PlayerScreen extends StatelessWidget {
@@ -15,10 +16,12 @@ class PlayerScreen extends StatelessWidget {
     super.key,
     required this.player,
     required this.api,
+    required this.likes,
     required this.onRadio,
   });
   final PlayerController player;
   final Api api;
+  final LikesStore likes;
   final void Function(Track) onRadio;
 
   @override
@@ -95,6 +98,10 @@ class PlayerScreen extends StatelessWidget {
                                           size: art,
                                           radius: 14,
                                           border: false,
+                                          // The Hero flight is the transition;
+                                          // a second reveal would show the
+                                          // finished image and then animate it.
+                                          animate: false,
                                         ),
                                       ),
                                     ),
@@ -167,6 +174,8 @@ class PlayerScreen extends StatelessWidget {
                                       player: player,
                                       url: coverUrl,
                                       api: api,
+                                      likes: likes,
+                                      track: t,
                                     ),
                                   ],
                                 ),
@@ -327,10 +336,18 @@ class _MenuRow extends StatelessWidget {
 }
 
 class _Controls extends StatelessWidget {
-  const _Controls({required this.player, required this.url, required this.api});
+  const _Controls({
+    required this.player,
+    required this.url,
+    required this.api,
+    required this.likes,
+    required this.track,
+  });
   final PlayerController player;
   final String? url;
   final Api api;
+  final LikesStore likes;
+  final Track track;
 
   @override
   Widget build(BuildContext context) {
@@ -379,6 +396,22 @@ class _Controls extends StatelessWidget {
               iconSize: 30,
               icon: Icon(Icons.skip_next_rounded, color: p.onRoom),
               onPressed: player.next,
+            ),
+            const SizedBox(width: S.lg),
+            GestureDetector(
+              onTap: () => likes.toggle(track),
+              child: AnimatedScale(
+                scale: likes.contains(track.id) ? 1.0 : 0.9,
+                duration: const Duration(milliseconds: 160),
+                curve: Curves.easeOut,
+                child: Icon(
+                  likes.contains(track.id)
+                      ? Icons.favorite_rounded
+                      : Icons.favorite_border_rounded,
+                  size: 24,
+                  color: likes.contains(track.id) ? accent : p.onRoomMute,
+                ),
+              ),
             ),
           ],
         );

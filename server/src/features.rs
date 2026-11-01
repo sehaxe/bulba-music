@@ -23,15 +23,22 @@ pub struct Fingerprint {
     pub vec: Vec<f32>,
     pub tempo_bpm: f32,
     pub brightness: f32,
+    /// Loudness proxy, 0..1. Used to separate calm from loud.
+    pub energy: f32,
+    /// Major (+1) to minor (-1) estimate. This is what separates "sad" from
+    /// "happy" without a genre model.
+    pub mode: f32,
 }
 
 pub fn extract(path: &str) -> Result<Fingerprint> {
     let pcm = decode(path)?;
-    let (vec, tempo_bpm, brightness) = embed(&pcm);
+    let (vec, tempo_bpm, brightness, energy, mode) = embed(&pcm);
     Ok(Fingerprint {
         vec,
         tempo_bpm,
         brightness,
+        energy,
+        mode,
     })
 }
 
@@ -102,11 +109,12 @@ fn chroma_map() -> Vec<Option<usize>> {
         .collect()
 }
 
-fn embed(pcm: &[f32]) -> (Vec<f32>, f32, f32) {
+fn embed(pcm: &[f32]) -> (Vec<f32>, f32, f32, f32, f32) {
     let mut out = vec![0.0f32; DIM];
     if pcm.len() < N_FFT {
-        return (out, 0.0, 0.0);
+        return (out, 0.0, 0.0, 0.0, 0.0);
     }
+    let energy = rms(pcm);
 
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(N_FFT);
@@ -194,7 +202,7 @@ fn embed(pcm: &[f32]) -> (Vec<f32>, f32, f32) {
     }
 
     if frames == 0 {
-        return (out, 0.0, 0.0);
+        return (out, 0.0, 0.0, 0.0, 0.0);
     }
 
     // mel: mean log energy, centred so loudness differences do not dominate.
@@ -210,7 +218,16 @@ fn embed(pcm: &[f32]) -> (Vec<f32>, f32, f32) {
     }
 
     let brightness = (centroid / frames as f64) as f32;
-    let tempo_bpm = tempo_from_onsets(&onsets);
+    let mode = mode_score(&chroma_acc.clone().try_into().unwrap_or([0.0; 12]));
+    // Fold octave errors: autocorrelation happily reports half or double the
+    // real tempo, and 56 instead of 112 pushes a dance track into "calm".
+    let mut tempo_bpm = tempo_from_onsets(&onsets);
+    while tempo_bpm > 0.0 && tempo_bpm < 70.0 {
+        tempo_bpm *= 2.0;
+    }
+    while tempo_bpm > 180.0 {
+        tempo_bpm /= 2.0;
+    }
     out[52] = brightness;
     out[53] = (flatness / frames as f64) as f32;
     out[54] = (rolloff / frames as f64) as f32;
@@ -234,7 +251,70 @@ fn embed(pcm: &[f32]) -> (Vec<f32>, f32, f32) {
             *v /= norm;
         }
     }
-    (out, tempo_bpm, brightness)
+    (out, tempo_bpm, brightness, energy, mode)
+}
+
+fn rms(pcm: &[f32]) -> f32 {
+    if pcm.is_empty() {
+        return 0.0;
+    }
+    let sum: f64 = pcm.iter().map(|x| (*x as f64) * (*x as f64)).sum();
+    // Raw RMS in dBFS. Absolute loudness is useless across masters (a modern
+    // master sits at -9 dB, a quiet acoustic at -22), so this is normalised
+    // against the library when mixes are built.
+    (10.0 * (sum / pcm.len() as f64).max(1e-9).log10()) as f32
+}
+
+/// Krumhansl-Schmuckler profiles: correlate the chroma vector against the major
+/// and the minor profile in all twelve rotations and take the best of each.
+/// The difference is the mode score, which is the closest cheap proxy for
+/// "happy" versus "sad" that does not need a trained model.
+fn mode_score(chroma: &[f64; 12]) -> f32 {
+    const MAJOR: [f64; 12] = [
+        6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88,
+    ];
+    const MINOR: [f64; 12] = [
+        6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17,
+    ];
+    let best = |profile: &[f64; 12]| {
+        (0..12)
+            .map(|k| correlation(chroma, &rotate(profile, k)))
+            .fold(f64::NEG_INFINITY, f64::max)
+    };
+    let major = best(&MAJOR);
+    let minor = best(&MINOR);
+    if !major.is_finite() || !minor.is_finite() {
+        return 0.0;
+    }
+    (major - minor) as f32
+}
+
+fn rotate(profile: &[f64; 12], k: usize) -> [f64; 12] {
+    let mut out = [0.0; 12];
+    for i in 0..12 {
+        out[(i + k) % 12] = profile[i];
+    }
+    out
+}
+
+fn correlation(a: &[f64; 12], b: &[f64; 12]) -> f64 {
+    let n = 12.0;
+    let ma = a.iter().sum::<f64>() / n;
+    let mb = b.iter().sum::<f64>() / n;
+    let mut num = 0.0;
+    let mut da = 0.0;
+    let mut db = 0.0;
+    for i in 0..12 {
+        let x = a[i] - ma;
+        let y = b[i] - mb;
+        num += x * y;
+        da += x * x;
+        db += y * y;
+    }
+    if da <= 0.0 || db <= 0.0 {
+        return 0.0;
+    }
+    num / (da.sqrt() * db.sqrt())
 }
 
 /// Autocorrelation of the spectral-flux envelope: the lag of the strongest
@@ -300,7 +380,7 @@ mod tests {
     #[test]
     fn chroma_identifies_the_pitch_class() {
         // 440 Hz is A = pitch class 9.
-        let (v, _, _) = embed(&sine(440.0, 4.0));
+        let (v, _, _, _, _) = embed(&sine(440.0, 4.0));
         let chroma = &v[MEL_BANDS..MEL_BANDS + 12];
         let best = chroma
             .iter()
@@ -313,30 +393,30 @@ mod tests {
 
     #[test]
     fn vector_is_normalised_and_stable() {
-        let (a, _, _) = embed(&sine(220.0, 3.0));
-        let (b, _, _) = embed(&sine(220.0, 3.0));
+        let (a, _, _, _, _) = embed(&sine(220.0, 3.0));
+        let (b, _, _, _, _) = embed(&sine(220.0, 3.0));
         assert!((a.iter().map(|x| x * x).sum::<f32>() - 1.0).abs() < 1e-4);
         assert!(cosine(&a, &b) > 0.999);
     }
 
     #[test]
     fn different_pitches_are_less_similar_than_identical_ones() {
-        let (a, _, _) = embed(&sine(220.0, 3.0));
-        let (b, _, _) = embed(&sine(330.0, 3.0));
-        let (c, _, _) = embed(&sine(220.0, 3.0));
+        let (a, _, _, _, _) = embed(&sine(220.0, 3.0));
+        let (b, _, _, _, _) = embed(&sine(330.0, 3.0));
+        let (c, _, _, _, _) = embed(&sine(220.0, 3.0));
         assert!(cosine(&a, &b) < cosine(&a, &c));
     }
 
     #[test]
     fn blob_roundtrip() {
-        let (v, _, _) = embed(&sine(500.0, 2.0));
+        let (v, _, _, _, _) = embed(&sine(500.0, 2.0));
         let back = from_blob(&to_blob(&v));
         assert_eq!(v, back);
     }
 
     #[test]
     fn silence_does_not_panic_or_nan() {
-        let (v, _, _) = embed(&vec![0.0; SAMPLE_RATE as usize]);
+        let (v, _, _, _, _) = embed(&vec![0.0; SAMPLE_RATE as usize]);
         assert_eq!(v.len(), DIM);
         assert!(v.iter().all(|x| x.is_finite()));
     }

@@ -18,8 +18,10 @@ class PlayerController extends ChangeNotifier {
       notifyListeners();
     });
     _player.stream.duration.listen((d) {
-      if (d > Duration.zero) _duration = d;
-      notifyListeners();
+      if (d > Duration.zero) {
+        _duration = d;
+        notifyListeners();
+      }
     });
     _player.stream.playing.listen((v) {
       _playing = v;

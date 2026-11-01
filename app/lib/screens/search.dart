@@ -6,21 +6,27 @@ import '../api/client.dart';
 import '../design/components.dart';
 import '../design/tokens.dart';
 import '../player/controller.dart';
+import '../player/likes.dart';
 import '../widgets/track_row.dart';
+import 'collection.dart';
 
-/// Global search: one field, results grouped the way people ask for them —
-/// tracks first, then the albums the query touches.
+/// Global search: one field, three sections. Pressing an artist narrows the
+/// query to them instead of leaving the user to retype the name.
 class SearchScreen extends StatefulWidget {
   const SearchScreen({
     super.key,
     required this.api,
     required this.player,
     required this.onRadio,
+    required this.onOpen,
+    required this.likes,
   });
 
   final Api api;
   final PlayerController player;
   final void Function(Track) onRadio;
+  final void Function(Collection) onOpen;
+  final LikesStore likes;
 
   @override
   State<SearchScreen> createState() => _SearchScreenState();
@@ -30,9 +36,8 @@ class _SearchScreenState extends State<SearchScreen> {
   final TextEditingController _query = TextEditingController();
   final FocusNode _focus = FocusNode();
   Timer? _debounce;
-  List<Track> _results = const [];
+  SearchResults? _results;
   bool _loading = false;
-  String _last = '';
 
   @override
   void initState() {
@@ -52,20 +57,18 @@ class _SearchScreenState extends State<SearchScreen> {
     _debounce?.cancel();
     if (value.trim().isEmpty) {
       setState(() {
-        _results = const [];
-        _last = '';
+        _results = null;
         _loading = false;
       });
       return;
     }
     setState(() => _loading = true);
-    _debounce = Timer(const Duration(milliseconds: 220), () async {
+    _debounce = Timer(const Duration(milliseconds: 180), () async {
       try {
         final results = await widget.api.search(value.trim());
         if (!mounted || _query.text.trim() != value.trim()) return;
         setState(() {
           _results = results;
-          _last = value.trim();
           _loading = false;
         });
       } catch (_) {
@@ -74,11 +77,15 @@ class _SearchScreenState extends State<SearchScreen> {
     });
   }
 
+  void _searchFor(String text) {
+    _query.text = text;
+    _query.selection = TextSelection.collapsed(offset: text.length);
+    _onChanged(text);
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
-    final albums = albumsOf(_results);
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -110,7 +117,7 @@ class _SearchScreenState extends State<SearchScreen> {
                     decoration: InputDecoration(
                       isDense: true,
                       border: InputBorder.none,
-                      hintText: 'tracks, artists, albums',
+                      hintText: 'track, artist, album — or a fragment',
                       hintStyle: T.body(p.ash),
                     ),
                   ),
@@ -130,13 +137,14 @@ class _SearchScreenState extends State<SearchScreen> {
         ),
         const SizedBox(height: S.md),
         Hr(color: p.hairlineStrong),
-        Expanded(child: _body(context, p, albums)),
+        Expanded(child: _body(p)),
       ],
     );
   }
 
-  Widget _body(BuildContext context, Palette p, List<Album> albums) {
-    if (_last.isEmpty) {
+  Widget _body(Palette p) {
+    final results = _results;
+    if (_query.text.trim().isEmpty) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -145,56 +153,83 @@ class _SearchScreenState extends State<SearchScreen> {
             const SizedBox(height: S.md),
             Text('search the library', style: T.label(p.mute)),
             const SizedBox(height: S.xs),
-            Text('artist, album, track name', style: T.caption(p.ash)),
+            Text(
+              'fragments work — "happ" finds "Let It Happen"',
+              style: T.caption(p.ash),
+            ),
           ],
         ),
       );
     }
-    if (_loading && _results.isEmpty) {
+    if (_loading && results == null) {
       return Center(child: Text('searching…', style: T.label(p.mute)));
     }
-    if (_results.isEmpty) {
+    if (results == null || results.isEmpty) {
       return Center(
-        child: Text('nothing found for "$_last"', style: T.label(p.mute)),
+        child: Text(
+          'nothing for "${_query.text.trim()}"',
+          style: T.label(p.mute),
+        ),
       );
     }
+
     return ListView(
       padding: const EdgeInsets.only(bottom: S.xxl),
       children: [
-        if (albums.isNotEmpty)
+        if (results.artists.isNotEmpty) ...[
+          _SectionHeader(label: 'artists', count: results.artists.length),
           Padding(
-            padding: const EdgeInsets.fromLTRB(S.xl, S.lg, S.xl, S.sm),
-            child: Row(
+            padding: const EdgeInsets.fromLTRB(S.xl, 0, S.xl, S.md),
+            child: Wrap(
+              spacing: S.sm,
+              runSpacing: S.sm,
               children: [
-                Text('albums', style: T.heading(p.ink)),
-                const SizedBox(width: S.sm),
-                Text('${albums.length}', style: T.caption(p.ash)),
-                const SizedBox(width: S.md),
-                Expanded(child: Hr(color: p.hairline)),
+                for (final a in results.artists)
+                  _ArtistChip(artist: a, onTap: () => _searchFor(a.name)),
               ],
             ),
           ),
-        if (albums.isNotEmpty)
+        ],
+        if (results.albums.isNotEmpty) ...[
+          _SectionHeader(label: 'albums', count: results.albums.length),
           SizedBox(
-            height: 208,
+            height: 206,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.fromLTRB(S.xl, 0, S.xl, S.sm),
-              itemCount: albums.length,
+              padding: const EdgeInsets.fromLTRB(S.xl, 0, S.xl, S.md),
+              itemCount: results.albums.length,
               separatorBuilder: (_, _) => const SizedBox(width: S.md),
               itemBuilder: (context, i) {
-                final a = albums[i];
+                final a = results.albums[i];
                 return SizedBox(
-                  width: 150,
+                  width: 148,
                   child: GestureDetector(
-                    onTap: () =>
-                        widget.player.play(a.tracks.first, queue: a.tracks),
+                    onTap: () async {
+                      // Fetch the album's tracks through search so the album
+                      // page opens with a real queue.
+                      final hit = await widget.api.search(a.title);
+                      if (!context.mounted) return;
+                      final tracks = hit.tracks
+                          .where((t) => t.albumId == a.id)
+                          .toList(growable: false);
+                      widget.onOpen(
+                        Collection(
+                          title: a.title,
+                          subtitle: [
+                            a.artist,
+                            if (a.year != null) '${a.year}',
+                          ].where((e) => e.isNotEmpty).join(' · '),
+                          tracks: tracks,
+                          coverUrl: widget.api.cover(a.id, a.hasCover),
+                        ),
+                      );
+                    },
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         CoverArt(
                           url: widget.api.cover(a.id, a.hasCover),
-                          size: 150,
+                          size: 148,
                           radius: 10,
                         ),
                         const SizedBox(height: S.sm),
@@ -205,7 +240,7 @@ class _SearchScreenState extends State<SearchScreen> {
                           style: T.bodyStrong(p.ink),
                         ),
                         Text(
-                          a.artist,
+                          '${a.artist} · ${a.tracks} ${plural(a.tracks)}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: T.micro(p.mute),
@@ -217,32 +252,101 @@ class _SearchScreenState extends State<SearchScreen> {
               },
             ),
           ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(S.xl, S.lg, S.xl, S.sm),
+        ],
+        if (results.tracks.isNotEmpty) ...[
+          _SectionHeader(label: 'tracks', count: results.tracks.length),
+          for (var i = 0; i < results.tracks.length; i++)
+            TrackRow(
+              key: ValueKey('search-${results.tracks[i].id}'),
+              track: results.tracks[i],
+              index: i + 1,
+              playing: widget.player.current?.id == results.tracks[i].id,
+              coverUrl: widget.api.cover(
+                results.tracks[i].albumId,
+                results.tracks[i].hasCover,
+              ),
+              onTap: () =>
+                  widget.player.play(results.tracks[i], queue: results.tracks),
+              onRadio: () => widget.onRadio(results.tracks[i]),
+              liked: widget.likes.contains(results.tracks[i].id),
+              onLike: () => widget.likes.toggle(results.tracks[i]),
+            ),
+        ],
+      ],
+    );
+  }
+}
+
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader({required this.label, required this.count});
+  final String label;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(S.xl, S.lg, S.xl, S.md),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Text(label, style: T.heading(p.ink)),
+          const SizedBox(width: S.sm),
+          Text('$count', style: T.caption(p.ash)),
+          const SizedBox(width: S.md),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 3),
+              child: Hr(color: p.hairline),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ArtistChip extends StatefulWidget {
+  const _ArtistChip({required this.artist, required this.onTap});
+  final SearchArtist artist;
+  final VoidCallback onTap;
+
+  @override
+  State<_ArtistChip> createState() => _ArtistChipState();
+}
+
+class _ArtistChipState extends State<_ArtistChip> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          padding: const EdgeInsets.symmetric(horizontal: S.md, vertical: 8),
+          decoration: BoxDecoration(
+            color: _hover ? p.card : p.soft,
+            border: Border.all(color: p.hairline),
+            borderRadius: BorderRadius.circular(10),
+          ),
           child: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Text('tracks', style: T.heading(p.ink)),
-              const SizedBox(width: S.sm),
-              Text('${_results.length}', style: T.caption(p.ash)),
-              const SizedBox(width: S.md),
-              Expanded(child: Hr(color: p.hairline)),
+              Icon(Icons.person_outline_rounded, size: 15, color: p.mute),
+              const SizedBox(width: 6),
+              Text(widget.artist.name, style: T.label(p.ink)),
+              const SizedBox(width: 6),
+              Text('${widget.artist.tracks}', style: T.micro(p.ash)),
             ],
           ),
         ),
-        for (var i = 0; i < _results.length; i++)
-          TrackRow(
-            key: ValueKey('search-${_results[i].id}'),
-            track: _results[i],
-            index: i + 1,
-            playing: widget.player.current?.id == _results[i].id,
-            coverUrl: widget.api.cover(
-              _results[i].albumId,
-              _results[i].hasCover,
-            ),
-            onTap: () => widget.player.play(_results[i], queue: _results),
-            onRadio: () => widget.onRadio(_results[i]),
-          ),
-      ],
+      ),
     );
   }
 }

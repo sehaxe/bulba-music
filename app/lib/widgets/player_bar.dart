@@ -61,7 +61,9 @@ class PlayerBar extends StatelessWidget {
             ),
             Expanded(
               child: Padding(
-                padding: const EdgeInsets.only(left: S.lg, right: 6),
+                // Symmetric padding keeps the transport block at the bar's exact centre;
+                // an asymmetric inset shifts it by half the difference.
+                padding: const EdgeInsets.symmetric(horizontal: S.md),
                 child: Row(
                   children: [
                     // Left: what is playing.
@@ -195,6 +197,7 @@ class _VolumeState extends State<_Volume> {
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
           GestureDetector(
             onTap: widget.player.toggleMute,

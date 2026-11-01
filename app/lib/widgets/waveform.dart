@@ -93,8 +93,8 @@ class _TrackWaveformState extends State<TrackWaveform>
               widget.player.seek((local.dx / box.maxWidth).clamp(0.0, 1.0));
           return GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTapDown: (d) => seek(d.localPosition),
-            onHorizontalDragUpdate: (d) => seek(d.localPosition),
+            onTapDown: (d) => seek(d.globalPosition),
+            onHorizontalDragUpdate: (d) => seek(d.globalPosition),
             child: AnimatedBuilder(
               animation: _reveal,
               builder: (context, _) => ClipRect(
