@@ -8,6 +8,7 @@ import '../api/client.dart';
 import '../design/accent.dart';
 import '../design/components.dart';
 import '../design/tokens.dart';
+import '../design/badges.dart';
 import '../player/controller.dart';
 import '../player/likes.dart';
 import '../widgets/queue_sheet.dart';
@@ -36,7 +37,11 @@ class PlayerScreen extends StatelessWidget {
         final p = Palette.of(context);
         final size = MediaQuery.sizeOf(context);
         final wide = size.width >= 900;
-        final art = wide ? 340.0 : (size.width * 0.72).clamp(180.0, 340.0);
+        // On a phone the cover should use the width it has, not a fixed 0.72 of
+        // it: the rest of the page is only about 330 px of chrome.
+        final art = wide
+            ? 340.0
+            : (size.width - 56).clamp(180.0, size.height - 330).toDouble();
         final coverUrl = api.cover(t.albumId, t.hasCover);
 
         return Scaffold(
@@ -124,7 +129,14 @@ class PlayerScreen extends StatelessWidget {
                                       overflow: TextOverflow.ellipsis,
                                       style: T.body(p.onRoomMute),
                                     ),
-                                    const SizedBox(height: S.xl),
+                                    const SizedBox(height: S.sm),
+                                    if (tagsOf(t).isNotEmpty)
+                                      TagStrip(
+                                        track: t,
+                                        max: 4,
+                                        color: p.onRoomMute,
+                                      ),
+                                    const SizedBox(height: S.lg),
                                     FutureBuilder<Color>(
                                       future: AccentCache.of(coverUrl),
                                       builder: (context, snap) {
@@ -134,7 +146,9 @@ class PlayerScreen extends StatelessWidget {
                                           children: [
                                             Padding(
                                               padding: EdgeInsets.symmetric(
-                                                horizontal: art * 0.14,
+                                                horizontal: wide
+                                                    ? art * 0.14
+                                                    : S.lg,
                                               ),
                                               child: TrackWaveform(
                                                 api: api,

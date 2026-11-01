@@ -149,11 +149,24 @@ class _WaveScreenState extends State<WaveScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(S.xl, S.xxl, S.xl, S.md),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
+          padding: EdgeInsets.fromLTRB(
+            S.xl,
+            MediaQuery.sizeOf(context).width < 560 ? S.lg : S.xxl,
+            S.xl,
+            S.md,
+          ),
+          child: Wrap(
+            crossAxisAlignment: WrapCrossAlignment.end,
+            alignment: WrapAlignment.spaceBetween,
+            spacing: S.md,
+            runSpacing: S.sm,
             children: [
-              Expanded(
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  minWidth: MediaQuery.sizeOf(context).width < 560
+                      ? MediaQuery.sizeOf(context).width - 2 * S.xl
+                      : 320,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -416,7 +429,9 @@ class _WaveRowState extends State<_WaveRow> {
                         Flexible(
                           child: Text(
                             widget.reason,
-                            maxLines: 1,
+                            maxLines: MediaQuery.sizeOf(context).width < 560
+                                ? 2
+                                : 1,
                             overflow: TextOverflow.ellipsis,
                             style: T.micro(p.ash),
                           ),

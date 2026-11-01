@@ -50,6 +50,9 @@ pub struct Request<'a> {
     pub limit: usize,
     /// 0 leans entirely on what is known, 1 leans entirely on the unknown.
     pub novelty: f64,
+    /// Title of the seed track, for the sentence. The id alone cannot be
+    /// turned into readable Russian.
+    pub seed_title: Option<&'a str>,
 }
 
 struct Stats {
@@ -302,12 +305,54 @@ pub fn pick(
 
     // At most two tracks per artist in one batch: five songs by the same band
     // is a playlist, not a wave.
+    // For every candidate, the artist of the most similar track the listener
+    // actually rewards — that is what makes a reason specific instead of a
+    // global "you like Tame Impala" repeated on every row.
+    let mut anchors: Vec<(Vec<f32>, i64)> = Vec::new();
+    for (id, vec) in &vectors {
+        let plays = *stats.plays.get(id).unwrap_or(&0);
+        let liked = stats.likes.contains(id);
+        if plays > 0 || liked {
+            anchors.push((vec.clone(), artist_of.get(id).copied().unwrap_or(-1)));
+        }
+    }
+
+    // The artist the listener rewards most, used to make the sentence concrete.
+    let mut top_artist: Option<String> = None;
+    {
+        let mut best = (0.0f64, -1i64);
+        for (track, plays) in &stats.plays {
+            if let Some(artist) = artist_of.get(track) {
+                let total: f64 = stats
+                    .plays
+                    .iter()
+                    .filter(|(t, _)| artist_of.get(*t) == Some(artist))
+                    .map(|(_, n)| *n as f64)
+                    .sum();
+                if total > best.0 {
+                    best = (total, *artist);
+                }
+            }
+        }
+        top_artist = name_of_artist.get(&best.1).cloned();
+    }
+
     let mut per_artist: HashMap<i64, i32> = HashMap::new();
     // The same recording lives on a dozen compilations; two of them in one
     // batch reads as a bug even when the tags are right.
     let mut seen_song: HashSet<String> = HashSet::new();
     let mut out = Vec::new();
     for (id, score, why) in scored {
+        let nearest_artist = |candidate: &[f32]| -> Option<i64> {
+            let mut best = (f32::MIN, -1i64);
+            for (vec, artist) in &anchors {
+                let sim = cos(candidate, vec);
+                if sim > best.0 {
+                    best = (sim, *artist);
+                }
+            }
+            (best.1 >= 0).then_some(best.1)
+        };
         if out.len() >= req.limit {
             break;
         }
@@ -330,15 +375,21 @@ pub fn pick(
         }
         *count += 1;
         let reason = match why {
-            Why::Seed => {
-                let seed_name = req
-                    .seed
-                    .and_then(|s| vectors.get(&s).map(|_| s))
-                    .and_then(|_| Some("этого трека".to_string()))
-                    .unwrap_or_else(|| "этого трека".into());
-                format!("рядом с {seed_name} по звуку")
+            Why::Seed => match req.seed_title {
+                Some(title) => format!("рядом с «{title}» по звуку"),
+                None => "рядом с этим треком по звуку".to_string(),
+            },
+            Why::Novel => {
+                let near = vectors
+                    .get(&id)
+                    .and_then(|v| nearest_artist(v))
+                    .and_then(|a| name_of_artist.get(&a).cloned())
+                    .or_else(|| top_artist.clone());
+                match near {
+                    Some(name) => format!("новое, но рядом с {name}"),
+                    None => "новое, но близко к твоему вкусу".to_string(),
+                }
             }
-            Why::Novel => "новое, но близко к твоему вкусу".to_string(),
             Why::Return => "ты давно не слышал это".to_string(),
             Why::Artist => {
                 let name = name_of_artist
@@ -347,7 +398,17 @@ pub fn pick(
                     .unwrap_or_else(|| "этого артиста".into());
                 format!("ты много слушаешь {name}")
             }
-            Why::Taste => "похоже на то, что ты слушаешь".to_string(),
+            Why::Taste => {
+                let near = vectors
+                    .get(&id)
+                    .and_then(|v| nearest_artist(v))
+                    .and_then(|a| name_of_artist.get(&a).cloned())
+                    .or_else(|| top_artist.clone());
+                match near {
+                    Some(name) => format!("похоже на {name}"),
+                    None => "похоже на то, что ты слушаешь".to_string(),
+                }
+            }
         };
         out.push(WaveItem {
             track_id: id,
@@ -413,6 +474,7 @@ mod tests {
             exclude: &[],
             limit: 3,
             novelty: 0.3,
+            seed_title: None,
         };
         let mut artists = HashMap::new();
         let mut names = HashMap::new();
@@ -450,6 +512,7 @@ mod tests {
             exclude: &[1],
             limit: 5,
             novelty: 0.3,
+            seed_title: None,
         };
         let mut artists = HashMap::new();
         for id in 1..=5 {
@@ -472,6 +535,7 @@ mod tests {
             exclude: &[],
             limit: 4,
             novelty: 0.5,
+            seed_title: None,
         };
         let mut artists = HashMap::new();
         for id in 1..=5 {
@@ -493,6 +557,7 @@ mod tests {
             exclude: &[],
             limit: 5,
             novelty: 0.0,
+            seed_title: None,
         };
         let mut artists = HashMap::new();
         for id in 1..=5 {
@@ -514,6 +579,7 @@ mod tests {
             exclude: &[],
             limit: 5,
             novelty: 0.3,
+            seed_title: None,
         };
         assert!(pick(&conn, &req, &HashMap::new(), &HashMap::new(), &HashMap::new())
             .unwrap()

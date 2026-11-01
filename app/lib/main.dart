@@ -160,50 +160,50 @@ class _BulbaAppState extends State<BulbaApp> {
       key: _shotKey,
       child: ValueListenableBuilder<ThemeMode>(
         valueListenable: themeMode,
-        builder: (context, mode, _) => PreviewSize(
-          child: MaterialApp(
-            title: 'bulba music',
-            debugShowCheckedModeBanner: false,
-            theme: _theme(Palette.light, Brightness.light),
-            darkTheme: _theme(Palette.inkNight, Brightness.dark),
-            themeMode: mode,
-            home: !_ready
-                ? const ColoredBox(color: Color(0xFF141210))
-                : _needsAuth
-                ? AuthScreen(
-                    api: api,
-                    player: player,
-                    likes: likes,
-                    onSignedIn: (token) async {
-                      await _prefs?.setToken(token);
-                      if (mounted) setState(() => _needsAuth = false);
-                    },
-                  )
-                : _onboarding
-                ? Onboarding(
-                    api: api,
-                    initialTheme: themeMode.value,
-                    onTheme: (m) {
-                      themeMode.value = m;
-                      _prefs?.setThemeMode(switch (m) {
-                        ThemeMode.light => 'light',
-                        ThemeMode.system => 'system',
-                        _ => 'dark',
-                      });
-                    },
-                    onDone: () async {
-                      await _prefs?.setOnboardingSeen();
-                      setState(() => _onboarding = false);
-                    },
-                  )
-                : Shell(
-                    api: api,
-                    player: player,
-                    likes: likes,
-                    prefs: _prefs!,
-                    themeMode: themeMode,
-                  ),
-          ),
+        builder: (context, mode, _) => MaterialApp(
+          builder: (context, child) =>
+              PreviewSize(child: child ?? const SizedBox()),
+          title: 'bulba music',
+          debugShowCheckedModeBanner: false,
+          theme: _theme(Palette.light, Brightness.light),
+          darkTheme: _theme(Palette.inkNight, Brightness.dark),
+          themeMode: mode,
+          home: !_ready
+              ? const ColoredBox(color: Color(0xFF141210))
+              : _needsAuth
+              ? AuthScreen(
+                  api: api,
+                  player: player,
+                  likes: likes,
+                  onSignedIn: (token) async {
+                    await _prefs?.setToken(token);
+                    if (mounted) setState(() => _needsAuth = false);
+                  },
+                )
+              : _onboarding
+              ? Onboarding(
+                  api: api,
+                  initialTheme: themeMode.value,
+                  onTheme: (m) {
+                    themeMode.value = m;
+                    _prefs?.setThemeMode(switch (m) {
+                      ThemeMode.light => 'light',
+                      ThemeMode.system => 'system',
+                      _ => 'dark',
+                    });
+                  },
+                  onDone: () async {
+                    await _prefs?.setOnboardingSeen();
+                    setState(() => _onboarding = false);
+                  },
+                )
+              : Shell(
+                  api: api,
+                  player: player,
+                  likes: likes,
+                  prefs: _prefs!,
+                  themeMode: themeMode,
+                ),
         ),
       ),
     );

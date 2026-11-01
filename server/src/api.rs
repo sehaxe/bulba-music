@@ -782,7 +782,7 @@ async fn wave(
         let mut title_of: HashMap<i64, String> = HashMap::new();
         {
             let mut stmt = conn.prepare(
-                "SELECT t.id, ar.id, ar.name FROM track t
+                "SELECT t.id, ar.id, ar.name, t.title FROM track t
                  JOIN album al ON al.id = t.album_id
                  JOIN artist ar ON ar.id = al.artist_id",
             )?;
@@ -809,6 +809,10 @@ async fn wave(
             )
             .unwrap_or(0);
 
+        let seed_title: Option<String> = q
+            .seed
+            .and_then(|id| title_of.get(&id).cloned());
+
         let items = crate::wave::pick(
             &conn,
             &crate::wave::Request {
@@ -817,6 +821,7 @@ async fn wave(
                 exclude: &exclude,
                 limit,
                 novelty,
+                seed_title: seed_title.as_deref(),
             },
             &artist_of,
             &name_of_artist,

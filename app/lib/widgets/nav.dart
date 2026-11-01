@@ -20,7 +20,7 @@ const kLibraryTab = 3;
 
 const kNavItems = <NavItemData>[
   NavItemData(Icons.home_rounded, 'home'),
-  NavItemData(Icons.waves_rounded, 'волна'),
+  NavItemData(Icons.graphic_eq_rounded, 'волна'),
   NavItemData(Icons.search_rounded, 'search'),
   NavItemData(Icons.grid_view_rounded, 'library'),
   NavItemData(Icons.favorite_rounded, 'liked'),
