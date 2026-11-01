@@ -27,39 +27,7 @@ class Onboarding extends StatefulWidget {
 class _OnboardingState extends State<Onboarding> {
   final PageController _pages = PageController();
   int _page = 0;
-  int _tracks = 0;
-  int _albums = 0;
-  bool _scanning = false;
   late ThemeMode _theme = widget.initialTheme;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadInfo();
-  }
-
-  Future<void> _loadInfo() async {
-    try {
-      final info = await widget.api.info();
-      final stats = info['stats'] as Map<String, dynamic>? ?? {};
-      if (!mounted) return;
-      setState(() {
-        _tracks = (stats['tracks'] ?? 0) as int;
-        _albums = (stats['albums'] ?? 0) as int;
-      });
-    } catch (_) {
-      // A missing server is not an error here: the next screen explains it.
-    }
-  }
-
-  Future<void> _scan() async {
-    setState(() => _scanning = true);
-    try {
-      await widget.api.scan();
-    } catch (_) {}
-    await _loadInfo();
-    if (mounted) setState(() => _scanning = false);
-  }
 
   @override
   void dispose() {
@@ -92,13 +60,6 @@ class _OnboardingState extends State<Onboarding> {
                 onPageChanged: (i) => setState(() => _page = i),
                 children: [
                   _Welcome(p: p),
-                  _Library(
-                    p: p,
-                    tracks: _tracks,
-                    albums: _albums,
-                    scanning: _scanning,
-                    onScan: _scan,
-                  ),
                   _Look(
                     p: p,
                     theme: _theme,
@@ -235,73 +196,6 @@ class _Bullet extends StatelessWidget {
           Text(text, style: T.body(p.ink)),
         ],
       ),
-    );
-  }
-}
-
-class _Library extends StatelessWidget {
-  const _Library({
-    required this.p,
-    required this.tracks,
-    required this.albums,
-    required this.scanning,
-    required this.onScan,
-  });
-  final Palette p;
-  final int tracks;
-  final int albums;
-  final bool scanning;
-  final VoidCallback onScan;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(S.xxl, S.xxl, S.xxl, S.xl),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text('библиотека', style: T.displayM(p.ink)),
-          const SizedBox(height: S.sm),
-          Text(
-            'Сервер читает папки, которые ему указали. Теги, обложки и '
-            'длительность подтягиваются сами.',
-            style: T.body(p.mute),
-          ),
-          const SizedBox(height: S.xl),
-          Row(
-            children: [
-              _Number(p: p, value: '$tracks', label: 'треков'),
-              const SizedBox(width: S.xxl),
-              _Number(p: p, value: '$albums', label: 'альбомов'),
-            ],
-          ),
-          const SizedBox(height: S.xl),
-          Text(
-            'Сервер уже прочитал папку библиотеки. Дальше он обновляет её сам — '
-            'ничего сканировать с телефона не нужно.',
-            style: T.micro(p.ash),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Number extends StatelessWidget {
-  const _Number({required this.p, required this.value, required this.label});
-  final Palette p;
-  final String value;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(value, style: T.displayL(p.ink)),
-        Text(label, style: T.caption(p.mute)),
-      ],
     );
   }
 }

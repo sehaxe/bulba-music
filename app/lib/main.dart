@@ -142,48 +142,86 @@ class _BulbaAppState extends State<BulbaApp> {
       key: _shotKey,
       child: ValueListenableBuilder<ThemeMode>(
         valueListenable: themeMode,
-        builder: (context, mode, _) => MaterialApp(
-          title: 'bulba music',
-          debugShowCheckedModeBanner: false,
-          theme: _theme(Palette.light, Brightness.light),
-          darkTheme: _theme(Palette.inkNight, Brightness.dark),
-          themeMode: mode,
-          home: !_ready
-              ? const ColoredBox(color: Color(0xFF141210))
-              : _needsAuth
-              ? AuthScreen(
-                  api: api,
-                  player: player,
-                  likes: likes,
-                  onSignedIn: (token) async {
-                    await _prefs?.setToken(token);
-                    if (mounted) setState(() => _needsAuth = false);
-                  },
-                )
-              : _onboarding
-              ? Onboarding(
-                  api: api,
-                  initialTheme: themeMode.value,
-                  onTheme: (m) {
-                    themeMode.value = m;
-                    _prefs?.setThemeMode(switch (m) {
-                      ThemeMode.light => 'light',
-                      ThemeMode.system => 'system',
-                      _ => 'dark',
-                    });
-                  },
-                  onDone: () async {
-                    await _prefs?.setOnboardingSeen();
-                    setState(() => _onboarding = false);
-                  },
-                )
-              : Shell(
-                  api: api,
-                  player: player,
-                  likes: likes,
-                  prefs: _prefs!,
-                  themeMode: themeMode,
-                ),
+        builder: (context, mode, _) => PreviewSize(
+          child: MaterialApp(
+            title: 'bulba music',
+            debugShowCheckedModeBanner: false,
+            theme: _theme(Palette.light, Brightness.light),
+            darkTheme: _theme(Palette.inkNight, Brightness.dark),
+            themeMode: mode,
+            home: !_ready
+                ? const ColoredBox(color: Color(0xFF141210))
+                : _needsAuth
+                ? AuthScreen(
+                    api: api,
+                    player: player,
+                    likes: likes,
+                    onSignedIn: (token) async {
+                      await _prefs?.setToken(token);
+                      if (mounted) setState(() => _needsAuth = false);
+                    },
+                  )
+                : _onboarding
+                ? Onboarding(
+                    api: api,
+                    initialTheme: themeMode.value,
+                    onTheme: (m) {
+                      themeMode.value = m;
+                      _prefs?.setThemeMode(switch (m) {
+                        ThemeMode.light => 'light',
+                        ThemeMode.system => 'system',
+                        _ => 'dark',
+                      });
+                    },
+                    onDone: () async {
+                      await _prefs?.setOnboardingSeen();
+                      setState(() => _onboarding = false);
+                    },
+                  )
+                : Shell(
+                    api: api,
+                    player: player,
+                    likes: likes,
+                    prefs: _prefs!,
+                    themeMode: themeMode,
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// BULBA_WINDOW=390x844 makes the app lay itself out for a phone while the
+/// desktop window stays whatever it is. It only exists so narrow layouts can be
+/// reviewed with the same screenshot harness as wide ones.
+class PreviewSize extends StatelessWidget {
+  const PreviewSize({super.key, required this.child});
+  final Widget child;
+
+  static Size? get size {
+    final raw = Platform.environment['BULBA_WINDOW'];
+    if (raw == null) return null;
+    final parts = raw.split('x');
+    if (parts.length != 2) return null;
+    final w = double.tryParse(parts[0]);
+    final h = double.tryParse(parts[1]);
+    if (w == null || h == null || w < 200 || h < 200) return null;
+    return Size(w, h);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final target = size;
+    if (target == null) return child;
+    return Align(
+      alignment: Alignment.center,
+      child: SizedBox(
+        width: target.width,
+        height: target.height,
+        child: MediaQuery(
+          data: MediaQuery.of(context).copyWith(size: target),
+          child: ClipRect(child: child),
         ),
       ),
     );

@@ -87,7 +87,14 @@ jobs:
 
       - name: build apk
         working-directory: app
-        run: flutter build apk --release --target-platform android-arm64
+        # The phone cannot reach loopback: the server address is baked in at
+        # build time from the repository variable.
+        env:
+          BULBA_SERVER: ${{ vars.BULBA_SERVER }}
+        run: |
+          flutter build apk --release \
+            --target-platform android-arm64 \
+            --dart-define=BULBA_SERVER="${BULBA_SERVER:-http://127.0.0.1:8422}"
 
       - name: pack apk
         run: |

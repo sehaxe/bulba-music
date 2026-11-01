@@ -11,6 +11,10 @@ class NavItemData {
   final String label;
 }
 
+/// Settings is last on purpose: the shell keeps it reachable even when the
+/// server does not answer.
+const kSettingsTab = 4;
+
 const kNavItems = <NavItemData>[
   NavItemData(Icons.home_rounded, 'home'),
   NavItemData(Icons.search_rounded, 'search'),
@@ -54,37 +58,18 @@ class FloatingNav extends StatelessWidget {
             ),
             child: LayoutBuilder(
               builder: (context, box) {
-                final cell = box.maxWidth / kNavItems.length;
-                return Stack(
+                return Row(
                   children: [
-                    AnimatedPositioned(
-                      duration: const Duration(milliseconds: 320),
-                      curve: Curves.easeOutBack,
-                      left: cell * index + (cell - 52) / 2,
-                      top: 8,
-                      child: Container(
-                        width: 52,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          color: accent.withValues(alpha: 0.16),
-                          borderRadius: BorderRadius.circular(16),
+                    for (var i = 0; i < kNavItems.length; i++)
+                      Expanded(
+                        child: _NavIcon(
+                          item: kNavItems[i],
+                          active: i == index,
+                          color: i == index ? accent : p.mute,
+                          highlight: accent,
+                          onTap: () => onSelect(i),
                         ),
-                        child: Icon(Icons.circle, size: 5, color: accent),
                       ),
-                    ),
-                    Row(
-                      children: [
-                        for (var i = 0; i < kNavItems.length; i++)
-                          Expanded(
-                            child: _NavIcon(
-                              item: kNavItems[i],
-                              active: i == index,
-                              color: i == index ? accent : p.mute,
-                              onTap: () => onSelect(i),
-                            ),
-                          ),
-                      ],
-                    ),
                   ],
                 );
               },
@@ -102,10 +87,12 @@ class _NavIcon extends StatefulWidget {
     required this.active,
     required this.color,
     required this.onTap,
+    this.highlight,
   });
   final NavItemData item;
   final bool active;
   final Color color;
+  final Color? highlight;
   final VoidCallback onTap;
 
   @override
@@ -127,11 +114,25 @@ class _NavIconState extends State<_NavIcon> {
         scale: _down ? 0.88 : 1,
         duration: const Duration(milliseconds: 110),
         curve: Curves.easeOut,
-        child: AnimatedScale(
-          scale: widget.active ? 1.08 : 1,
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOutBack,
-          child: Icon(widget.item.icon, size: 23, color: widget.color),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+          width: 52,
+          height: 46,
+          decoration: BoxDecoration(
+            color: widget.active
+                ? (widget.highlight ?? widget.color).withValues(alpha: 0.16)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(15),
+          ),
+          child: Center(
+            child: AnimatedScale(
+              scale: widget.active ? 1.08 : 1,
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutBack,
+              child: Icon(widget.item.icon, size: 23, color: widget.color),
+            ),
+          ),
         ),
       ),
     );

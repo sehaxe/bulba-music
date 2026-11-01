@@ -70,92 +70,107 @@ class _TrackRowState extends State<TrackRow> {
               : _hover
               ? p.soft
               : Colors.transparent,
-          padding: const EdgeInsets.symmetric(horizontal: S.xl, vertical: S.sm),
-          child: Row(
-            children: [
-              if (widget.index != null) ...[
-                SizedBox(
-                  width: 26,
-                  child: Text(
-                    widget.playing ? '▸' : '${widget.index}',
-                    textAlign: TextAlign.right,
-                    style: T.caption(
-                      widget.playing ? AccentScope.of(context) : p.ash,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: S.md),
-              ],
-              if (widget.showCover) ...[
-                CoverArt(url: widget.coverUrl, size: 40),
-                const SizedBox(width: S.md),
-              ],
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      t.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: T.bodyStrong(
-                        widget.playing ? AccentScope.of(context) : p.ink,
+          padding: EdgeInsets.symmetric(
+            horizontal: MediaQuery.sizeOf(context).width < 520 ? S.md : S.xl,
+            vertical: S.sm,
+          ),
+          child: Builder(
+            builder: (context) {
+              // On a phone the index, the format badge and the duration used to
+              // eat more than half the row, leaving "Let…" instead of a title.
+              final narrow = MediaQuery.sizeOf(context).width < 520;
+              return Row(
+                children: [
+                  if (widget.index != null && !narrow) ...[
+                    SizedBox(
+                      width: 26,
+                      child: Text(
+                        widget.playing ? '▸' : '${widget.index}',
+                        textAlign: TextAlign.right,
+                        style: T.caption(
+                          widget.playing ? AccentScope.of(context) : p.ash,
+                        ),
                       ),
                     ),
-                    Text(
-                      widget.showCover ? t.artist : '${t.artist} · ${t.album}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    const SizedBox(width: S.md),
+                  ],
+                  if (widget.showCover) ...[
+                    CoverArt(url: widget.coverUrl, size: 40),
+                    const SizedBox(width: S.md),
+                  ],
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          t.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: T.bodyStrong(
+                            widget.playing ? AccentScope.of(context) : p.ink,
+                          ),
+                        ),
+                        Text(
+                          widget.showCover
+                              ? t.artist
+                              : '${t.artist} · ${t.album}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: T.caption(p.mute),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (!narrow) ...[
+                    const SizedBox(width: S.lg),
+                    SizedBox(
+                      width: 96,
+                      child: Text(
+                        '[${t.format}]',
+                        textAlign: TextAlign.right,
+                        style: T.micro(p.ash),
+                        maxLines: 1,
+                      ),
+                    ),
+                    const SizedBox(width: S.md),
+                  ] else
+                    const SizedBox(width: S.sm),
+                  SizedBox(
+                    width: 52,
+                    child: Text(
+                      mmss(t.duration),
+                      textAlign: TextAlign.right,
                       style: T.caption(p.mute),
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: S.lg),
-              SizedBox(
-                width: 96,
-                child: Text(
-                  '[${t.format}]',
-                  textAlign: TextAlign.right,
-                  style: T.micro(p.ash),
-                  maxLines: 1,
-                ),
-              ),
-              const SizedBox(width: S.md),
-              SizedBox(
-                width: 52,
-                child: Text(
-                  mmss(t.duration),
-                  textAlign: TextAlign.right,
-                  style: T.caption(p.mute),
-                ),
-              ),
-              if (widget.onLike != null) ...[
-                const SizedBox(width: S.xs),
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: widget.onLike,
-                  child: SizedBox(
-                    width: 32,
-                    height: 32,
-                    child: AnimatedScale(
-                      scale: widget.liked ? 1.0 : 0.92,
-                      duration: const Duration(milliseconds: 140),
-                      child: Icon(
-                        widget.liked
-                            ? Icons.favorite_rounded
-                            : Icons.favorite_border_rounded,
-                        size: 17,
-                        color: widget.liked
-                            ? AccentScope.of(context)
-                            : (_hover ? p.mute : Colors.transparent),
+                  ),
+                  if (widget.onLike != null) ...[
+                    const SizedBox(width: S.xs),
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: widget.onLike,
+                      child: SizedBox(
+                        width: 32,
+                        height: 32,
+                        child: AnimatedScale(
+                          scale: widget.liked ? 1.0 : 0.92,
+                          duration: const Duration(milliseconds: 140),
+                          child: Icon(
+                            widget.liked
+                                ? Icons.favorite_rounded
+                                : Icons.favorite_border_rounded,
+                            size: 17,
+                            color: widget.liked
+                                ? AccentScope.of(context)
+                                : (_hover ? p.mute : Colors.transparent),
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ),
-              ],
-            ],
+                  ],
+                ],
+              );
+            },
           ),
         ),
       ),

@@ -1,3 +1,4 @@
+#include <cstdio>
 #include "my_application.h"
 
 #include <flutter_linux/flutter_linux.h>
@@ -52,7 +53,17 @@ static void my_application_activate(GApplication* application) {
     gtk_window_set_title(window, "bulba_music");
   }
 
-  gtk_window_set_default_size(window, 1280, 720);
+  // BULBA_WINDOW=390x844 makes the desktop build pretend to be a phone, which
+  // is how the narrow layout gets checked without a device.
+  int width = 1280, height = 720;
+  if (const char* size = g_getenv("BULBA_WINDOW")) {
+    int w = 0, h = 0;
+    if (sscanf(size, "%dx%d", &w, &h) == 2 && w > 200 && h > 200) {
+      width = w;
+      height = h;
+    }
+  }
+  gtk_window_set_default_size(window, width, height);
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(

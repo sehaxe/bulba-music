@@ -109,6 +109,7 @@ class _ShellState extends State<Shell> {
     super.dispose();
   }
 
+  bool _playerOpen = false;
   int? _lastTrackId;
   bool _lastPlaying = false;
 
@@ -247,19 +248,22 @@ class _ShellState extends State<Shell> {
 
   void _openPlayer() {
     if (widget.player.current == null) return;
-    Navigator.of(context).push(
-      PixelPageRoute<void>(
-        builder: (_) => AccentScope(
-          color: _accent,
-          child: PlayerScreen(
-            player: widget.player,
-            api: widget.api,
-            likes: widget.likes,
-            onRadio: _startRadio,
+    _playerOpen = true;
+    Navigator.of(context)
+        .push(
+          PixelPageRoute<void>(
+            builder: (_) => AccentScope(
+              color: _accent,
+              child: PlayerScreen(
+                player: widget.player,
+                api: widget.api,
+                likes: widget.likes,
+                onRadio: _startRadio,
+              ),
+            ),
           ),
-        ),
-      ),
-    );
+        )
+        .whenComplete(() => _playerOpen = false);
   }
 
   /// True while a text field owns the keyboard. Shortcuts are checked before
@@ -293,13 +297,20 @@ class _ShellState extends State<Shell> {
     return PopScope(
       // Android's back gesture pops one place at a time; the app only leaves
       // when there is nowhere left to go.
-      canPop: _stack.isEmpty && _tab == 0,
+      // Never let the system pop the root: back walks the app first and only
+      // leaves when the listener is already on home.
+      canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
-        if (_stack.isNotEmpty) {
+        if (_playerOpen) {
+          _playerOpen = false;
+          Navigator.of(context).maybePop();
+        } else if (_stack.isNotEmpty) {
           _back();
         } else if (_tab != 0) {
           _select(0);
+        } else {
+          SystemNavigator.pop();
         }
       },
       child: CallbackShortcuts(
@@ -369,7 +380,14 @@ class _ShellState extends State<Shell> {
               overflow: TextOverflow.ellipsis,
             ),
           ),
-        Expanded(child: _screen()),
+        // Likes change rarely but touch every row: one rebuild of the body
+        // keeps the hearts in lists honest the moment they are pressed.
+        Expanded(
+          child: ListenableBuilder(
+            listenable: widget.likes,
+            builder: (context, _) => _screen(),
+          ),
+        ),
       ],
     );
     return Scaffold(
@@ -420,8 +438,20 @@ class _ShellState extends State<Shell> {
     _stack.clear();
   });
 
+  Widget _settings() => SettingsScreen(
+    api: widget.api,
+    player: widget.player,
+    prefs: widget.prefs,
+    themeMode: widget.themeMode,
+    likes: widget.likes,
+    onRescan: _rescan,
+    onOpenAlbum: _openAlbumById,
+    onPlayTrack: _playStatTrack,
+  );
+
   Widget _screen() {
     final p = Palette.of(context);
+    if (_tab == kSettingsTab) return _settings();
     if (_loading) {
       return Center(child: Text('[ loading ]', style: T.label(p.mute)));
     }
@@ -441,7 +471,14 @@ class _ShellState extends State<Shell> {
               ),
             ),
             const SizedBox(height: S.lg),
-            BracketButton('retry', onTap: _load),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                BracketButton('retry', onTap: _load),
+                const SizedBox(width: S.md),
+                BracketButton('settings', onTap: () => _select(kSettingsTab)),
+              ],
+            ),
           ],
         ),
       );
@@ -553,16 +590,7 @@ class _ShellState extends State<Shell> {
           ),
         );
       default:
-        return SettingsScreen(
-          api: widget.api,
-          player: widget.player,
-          prefs: widget.prefs,
-          themeMode: widget.themeMode,
-          likes: widget.likes,
-          onRescan: _rescan,
-          onOpenAlbum: _openAlbumById,
-          onPlayTrack: _playStatTrack,
-        );
+        return _settings();
     }
   }
 }

@@ -64,10 +64,18 @@ class _LikedScreenState extends State<LikedScreen> {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(S.xl, S.xxl, S.xl, S.sm),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
+          child: Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.end,
+            spacing: S.md,
+            runSpacing: S.sm,
             children: [
-              Expanded(
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  minWidth: MediaQuery.sizeOf(context).width > 560
+                      ? MediaQuery.sizeOf(context).width - 420
+                      : 200,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
