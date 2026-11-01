@@ -1,35 +1,47 @@
 # bulba music
 
-Personal music server and player. Local-first: the catalogue lives on the server,
-the client keeps its own mirror and plays offline.
+Self-hosted music: the library lives on the server, the phone is a thin client
+over Tailscale, and the recommendations are computed from what you actually
+play — no catalogue, no cloud, no account on someone else's machine.
 
-- `server/` — Rust (axum + SQLite). Library scanning, tag reading, range streaming.
-- `app/` — Flutter client (Android, Linux, macOS).
-- `DESIGN.md` — the design system. Read before touching UI.
+## Layout
 
-## server
-
-```sh
-cd server
-cargo run -- scan --library ~/Music                    # import / refresh catalogue
-cargo run -- --library ~/Music --db ~/data/bulba.db     # serve on :8422
+```
+server/    Rust: axum + SQLite, scanning, features, recommendations, pages
+app/       Flutter: Linux/macOS/Android client
+library/   the music itself — Artist/Album (Year)/NN - Title.ext, gitignored
 ```
 
-Endpoints: `/api/health`, `/api/scan`, `/api/tracks`, `/api/tracks/{id}`,
-`/api/tracks/{id}/stream` (byte ranges), `/api/search`, `/api/manifest?since=rev`.
+`library/` is never committed. It is the one thing worth backing up.
+
+## Run
 
 ```sh
-cargo test
+cd server && cargo run --release              # http://0.0.0.0:8422
+cd app && flutter run -d linux                # or: flutter build apk
 ```
 
-## app
+The server scans `library/` on start and every five minutes. Clients never scan
+a disk; they ask the server.
+
+Overrides: `--library <path>` (repeatable), `--port`, `--db`, `BULBA_LIBRARY`,
+`BULBA_SERVER` for the client.
+
+## What is inside
+
+- **Library**: tags, covers, FLAC-master first, per-track format shown honestly.
+- **Index**: artists and albums grouped by letter with a rail; artist pages with
+  albums in release order and what you actually replay; album pages in disc order.
+- **Recommendations**: embeddings from the audio, four axes (tempo, brightness,
+  library-relative loudness, major/minor), daily mixes per mood, novelty capped
+  per list, taste as a weighted centroid of plays, skips, repeats and likes.
+- **Accounts**: twelve words, wallet style; the same phrase on two devices is one
+  listener. Only the hash is stored.
+- **Links**: `/a/<artist>`, `/al/<album>` — server-rendered, open from a phone.
+
+## Tests
 
 ```sh
-export PATH="$HOME/development/flutter/bin:$PATH"
-cd app
-flutter run -d linux --dart-define=BULBA_SERVER=http://127.0.0.1:8422
-flutter build linux --release          # native binary in build/linux/x64/release/bundle
+cd server && cargo test      # 60+ tests, no network
+cd app && flutter test
 ```
-
-Design tokens and rules live in `DESIGN.md`. Debug builds are several times slower than
-release — judge animation smoothness only from a release build.

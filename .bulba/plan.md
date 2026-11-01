@@ -619,3 +619,16 @@ watch folder.
 префикс > вхождение), плюс секции альбомов и артистов; несколько слов ищутся как AND по
 разным полям. FTS5 остаётся в схеме, но поиск через него больше не идёт: он не умеет
 фрагменты и опечатки.
+
+## Library relocation (2026-11-01, night)
+
+The library moved into the project: `./library`, gitignored, 504 tracks in one
+`Artist/Album (Year)/NN - Title.ext` tree (12 GB). Master rows were updated by
+prefix, so play history survived the move; nothing was re-imported.
+
+The server is now the only thing that touches disk: it scans on start and on a
+five-minute timer. The client's scan and feature buttons are gone by request —
+a phone should not know that folders exist.
+
+Duplicates live in `library/_duplicates` with their original names, and 99 FLACs
+that fail to parse stay where the downloader left them until they are replaced.
