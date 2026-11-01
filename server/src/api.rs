@@ -90,6 +90,11 @@ impl IntoResponse for ApiError {
 
 impl From<anyhow::Error> for ApiError {
     fn from(e: anyhow::Error) -> Self {
+        // Closures cannot build an ApiError, so they bail with this marker and
+        // it is translated here.
+        if format!("{e:#}").contains(UNAUTHORIZED) {
+            return Self::unauthorized("нужна фраза");
+        }
         Self::internal(e)
     }
 }
@@ -305,11 +310,16 @@ async fn get_album(
     out.map(Json).ok_or_else(|| ApiError::not_found("album"))
 }
 
-async fn list_album_likes(State(st): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn list_album_likes(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
     let db = st.db.clone();
     let out = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<crate::index::AlbumSummary>> {
         let conn = db.open()?;
-        let user = crate::db::default_user(&conn)?;
+        let user = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
         let mut stmt = conn.prepare(
             "SELECT a.id, a.title, ar.name, a.artist_id, a.year,
                     (SELECT count(*) FROM track t WHERE t.album_id=a.id),
@@ -341,11 +351,16 @@ async fn list_album_likes(State(st): State<AppState>) -> Result<Json<serde_json:
     Ok(Json(json!(out)))
 }
 
-async fn album_like_ids(State(st): State<AppState>) -> Result<Json<Vec<i64>>, ApiError> {
+async fn album_like_ids(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<Vec<i64>>, ApiError> {
     let db = st.db.clone();
     let out = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<i64>> {
         let conn = db.open()?;
-        let user = crate::db::default_user(&conn)?;
+        let user = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
         let mut stmt = conn.prepare("SELECT album_id FROM album_like WHERE user_id=?1")?;
         Ok(stmt.query_map([user], |r| r.get(0))?.filter_map(|r| r.ok()).collect())
     })
@@ -355,13 +370,15 @@ async fn album_like_ids(State(st): State<AppState>) -> Result<Json<Vec<i64>>, Ap
 
 async fn add_album_like(
     State(st): State<AppState>,
+    caller: Caller,
     headers: axum::http::HeaderMap,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let db = st.db.clone();
     tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
         let conn = db.open()?;
-        let user = user_from(&headers, &conn)?;
+        let user = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
         let exists: i64 =
             conn.query_row("SELECT count(*) FROM album WHERE id=?1", [id], |r| r.get(0))?;
         if exists == 0 {
@@ -382,13 +399,15 @@ async fn add_album_like(
 
 async fn remove_album_like(
     State(st): State<AppState>,
+    caller: Caller,
     headers: axum::http::HeaderMap,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let db = st.db.clone();
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         let conn = db.open()?;
-        let user = user_from(&headers, &conn)?;
+        let user = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
         conn.execute(
             "DELETE FROM album_like WHERE user_id=?1 AND album_id=?2",
             rusqlite::params![user, id],
@@ -401,12 +420,14 @@ async fn remove_album_like(
 
 async fn list_artist_likes(
     State(st): State<AppState>,
+    caller: Caller,
     headers: axum::http::HeaderMap,
 ) -> Result<Json<Vec<crate::index::ArtistSummary>>, ApiError> {
     let db = st.db.clone();
     let out = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<crate::index::ArtistSummary>> {
         let conn = db.open()?;
-        let user = user_from(&headers, &conn)?;
+        let user = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
         let list = crate::index::artists(&conn, 20_000)?;
         let mut liked = Vec::new();
         for mut a in list {
@@ -426,11 +447,16 @@ async fn list_artist_likes(
     Ok(Json(out))
 }
 
-async fn artist_like_ids(State(st): State<AppState>) -> Result<Json<Vec<i64>>, ApiError> {
+async fn artist_like_ids(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<Vec<i64>>, ApiError> {
     let db = st.db.clone();
     let out = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<i64>> {
         let conn = db.open()?;
-        let user = crate::db::default_user(&conn)?;
+        let user = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
         let mut stmt = conn.prepare("SELECT artist_id FROM artist_like WHERE user_id=?1")?;
         Ok(stmt.query_map([user], |r| r.get(0))?.filter_map(|r| r.ok()).collect())
     })
@@ -440,13 +466,15 @@ async fn artist_like_ids(State(st): State<AppState>) -> Result<Json<Vec<i64>>, A
 
 async fn add_artist_like(
     State(st): State<AppState>,
+    caller: Caller,
     headers: axum::http::HeaderMap,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let db = st.db.clone();
     tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
         let conn = db.open()?;
-        let user = user_from(&headers, &conn)?;
+        let user = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
         let exists: i64 =
             conn.query_row("SELECT count(*) FROM artist WHERE id=?1", [id], |r| r.get(0))?;
         if exists == 0 {
@@ -467,13 +495,15 @@ async fn add_artist_like(
 
 async fn remove_artist_like(
     State(st): State<AppState>,
+    caller: Caller,
     headers: axum::http::HeaderMap,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let db = st.db.clone();
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         let conn = db.open()?;
-        let user = user_from(&headers, &conn)?;
+        let user = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
         conn.execute(
             "DELETE FROM artist_like WHERE user_id=?1 AND artist_id=?2",
             rusqlite::params![user, id],
@@ -610,7 +640,11 @@ async fn stats(
     Ok(Json(out))
 }
 
-async fn info(State(st): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn info(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
     let db = st.db.clone();
     let libraries: Vec<String> = st
         .libraries
@@ -728,6 +762,7 @@ struct NewEvent {
 
 async fn record_events(
     State(st): State<AppState>,
+    caller: Caller,
     headers: HeaderMap,
     Json(events): Json<Vec<NewEvent>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -1081,17 +1116,54 @@ async fn daily_mixes(State(st): State<AppState>) -> Result<Json<Vec<Mix>>, ApiEr
 
 /// The bearer token, if any, decides who is asking. Without one the request
 /// belongs to the local user, so a single machine never has to log in.
-fn user_from(headers: &axum::http::HeaderMap, conn: &rusqlite::Connection) -> anyhow::Result<i64> {
+/// Requests from this machine are the owner's; anything else must present a
+/// token. Without the rule every phone silently inherits the desktop's likes
+/// and history, and "sync by phrase" means nothing.
+/// Whether the request came from this machine.
+///
+/// Read straight out of the request extensions, so it works the same whether
+/// the server was mounted with connect info or not (tests mount without it and
+/// therefore count as local).
+pub struct Caller {
+    pub local: bool,
+}
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for Caller {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        let local = parts
+            .extensions
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|axum::extract::ConnectInfo(addr)| addr.ip().is_loopback())
+            .unwrap_or(true);
+        Ok(Caller { local })
+    }
+}
+
+pub const UNAUTHORIZED: &str = "unauthorized: нужна фраза";
+
+fn user_from(
+    headers: &axum::http::HeaderMap,
+    conn: &rusqlite::Connection,
+    local: bool,
+) -> anyhow::Result<Option<i64>> {
     if let Some(value) = headers.get(axum::http::header::AUTHORIZATION) {
         if let Ok(text) = value.to_str() {
             if let Some(token) = text.strip_prefix("Bearer ") {
                 if let Some(id) = crate::auth::user_for_token(conn, token.trim())? {
-                    return Ok(id);
+                    return Ok(Some(id));
                 }
             }
         }
     }
-    crate::auth::local_user(conn)
+    if local {
+        return Ok(Some(crate::auth::local_user(conn)?));
+    }
+    Ok(None)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1138,12 +1210,14 @@ async fn login(
 
 async fn whoami(
     State(st): State<AppState>,
+    caller: Caller,
     headers: axum::http::HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let db = st.db.clone();
     let out = tokio::task::spawn_blocking(move || -> anyhow::Result<(i64, String)> {
         let conn = db.open()?;
-        let id = user_from(&headers, &conn)?;
+        let id = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
         let name: String = conn.query_row("SELECT name FROM user WHERE id=?1", [id], |r| r.get(0))?;
         Ok((id, name))
     })
@@ -1151,11 +1225,16 @@ async fn whoami(
     Ok(Json(json!({"user_id": out.0, "name": out.1})))
 }
 
-async fn list_likes(State(st): State<AppState>) -> Result<Json<Vec<Track>>, ApiError> {
+async fn list_likes(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<Vec<Track>>, ApiError> {
     let db = st.db.clone();
     let tracks = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Track>> {
         let conn = db.open()?;
-        let user = crate::db::default_user(&conn)?;
+        let user = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
         let mut stmt = conn.prepare(&format!(
             "SELECT {TRACK_COLUMNS} FROM v_track t
              JOIN track_like l ON l.track_id = t.id
@@ -1169,11 +1248,16 @@ async fn list_likes(State(st): State<AppState>) -> Result<Json<Vec<Track>>, ApiE
     Ok(Json(tracks))
 }
 
-async fn like_ids(State(st): State<AppState>) -> Result<Json<Vec<i64>>, ApiError> {
+async fn like_ids(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<Vec<i64>>, ApiError> {
     let db = st.db.clone();
     let ids = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<i64>> {
         let conn = db.open()?;
-        let user = crate::db::default_user(&conn)?;
+        let user = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
         let mut stmt = conn.prepare("SELECT track_id FROM track_like WHERE user_id = ?1")?;
         let rows = stmt.query_map([user], |r| r.get(0))?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -1184,13 +1268,15 @@ async fn like_ids(State(st): State<AppState>) -> Result<Json<Vec<i64>>, ApiError
 
 async fn add_like(
     State(st): State<AppState>,
+    caller: Caller,
     headers: axum::http::HeaderMap,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let db = st.db.clone();
     let ok = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
         let conn = db.open()?;
-        let user = user_from(&headers, &conn)?;
+        let user = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
         let exists: i64 = conn.query_row("SELECT count(*) FROM track WHERE id=?1", [id], |r| {
             r.get(0)
         })?;
@@ -1215,13 +1301,15 @@ async fn add_like(
 
 async fn remove_like(
     State(st): State<AppState>,
+    caller: Caller,
     headers: axum::http::HeaderMap,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let db = st.db.clone();
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         let conn = db.open()?;
-        let user = user_from(&headers, &conn)?;
+        let user = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
         conn.execute(
             "DELETE FROM track_like WHERE user_id=?1 AND track_id=?2",
             rusqlite::params![user, id],

@@ -166,6 +166,7 @@ class HomeScreen extends StatefulWidget {
     required this.accent,
     required this.onOpen,
     required this.onOpenAlbum,
+    required this.onOpenLibrary,
   });
 
   final List<Track> tracks;
@@ -176,6 +177,7 @@ class HomeScreen extends StatefulWidget {
   final Color accent;
   final void Function(Collection) onOpen;
   final void Function(int albumId) onOpenAlbum;
+  final VoidCallback onOpenLibrary;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -183,11 +185,30 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   List<Mix> _mixes = const [];
+  List<StatTrack> _frequent = const [];
+  List<Track> _recent = const [];
 
   @override
   void initState() {
     super.initState();
     _loadMixes();
+    _loadRows();
+  }
+
+  /// "Caught often" is the honest name for the first row: the tracks the
+  /// listener actually replays, and the newest additions when nothing has been
+  /// played yet, so the row is never empty on a fresh library.
+  Future<void> _loadRows() async {
+    try {
+      final stats = await widget.api.stats();
+      if (!mounted) return;
+      setState(() {
+        _frequent = stats.topTracks.take(7).toList();
+        _recent = widget.tracks.take(7).toList();
+      });
+    } catch (_) {
+      if (mounted) setState(() => _recent = widget.tracks.take(7).toList());
+    }
   }
 
   Future<void> _loadMixes() async {
@@ -244,9 +265,79 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
         ),
+        if (_frequent.isNotEmpty || _recent.isNotEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(S.xl, S.lg, S.xl, 0),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    _frequent.isEmpty ? 'новое в библиотеке' : 'часто слушаешь',
+                    style: T.heading(p.ink),
+                  ),
+                  const SizedBox(width: S.md),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 3),
+                      child: Hr(color: p.hairline),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        if (_frequent.isNotEmpty || _recent.isNotEmpty)
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(S.xl, S.sm, S.xl, 0),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, i) {
+                  if (_frequent.isNotEmpty) {
+                    final t = _frequent[i];
+                    final tracks = _frequent
+                        .map(
+                          (e) => Track(
+                            id: e.id,
+                            title: e.title,
+                            artist: e.artist,
+                            album: '',
+                            albumId: e.albumId,
+                            hasCover: e.hasCover,
+                          ),
+                        )
+                        .toList();
+                    return _FrequentRow(
+                      index: i,
+                      title: t.title,
+                      artist: t.artist,
+                      plays: t.plays,
+                      coverUrl: widget.api.cover(t.albumId, t.hasCover),
+                      onPlay: () =>
+                          widget.player.play(tracks[i], queue: tracks),
+                      onRadio: () => widget.onRadio(tracks[i]),
+                    );
+                  }
+                  final t = _recent[i];
+                  return _FrequentRow(
+                    index: i,
+                    title: t.title,
+                    artist: t.artist,
+                    plays: 0,
+                    coverUrl: widget.api.cover(t.albumId, t.hasCover),
+                    onPlay: () => widget.player.play(t, queue: _recent),
+                    onRadio: () => widget.onRadio(t),
+                  );
+                },
+                childCount: _frequent.isNotEmpty
+                    ? _frequent.length
+                    : _recent.length,
+              ),
+            ),
+          ),
         SliverToBoxAdapter(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(S.xl, S.lg, S.xl, 0),
+            padding: const EdgeInsets.fromLTRB(S.xl, S.xxl, S.xl, 0),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
@@ -320,35 +411,85 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: Hr(color: p.hairline),
                   ),
                 ),
+                const SizedBox(width: S.md),
+                Tooltip(
+                  message: 'все альбомы',
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: GestureDetector(
+                      onTap: widget.onOpenLibrary,
+                      child: MouseRegion(
+                        cursor: SystemMouseCursors.click,
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 3),
+                          child: Icon(
+                            Icons.arrow_forward_rounded,
+                            size: 18,
+                            color: p.mute,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
         ),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(S.xl, S.lg, S.xl, S.xxl),
-          sliver: SliverGrid(
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 200,
-              mainAxisExtent: 232,
-              crossAxisSpacing: S.lg,
-              mainAxisSpacing: S.xl,
+        SliverToBoxAdapter(
+          child: SizedBox(
+            height: 214,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.fromLTRB(S.xl, S.lg, S.xl, 0),
+              itemCount: albums.length,
+              separatorBuilder: (_, _) => const SizedBox(width: S.md),
+              itemBuilder: (context, i) {
+                final album = albums[i];
+                return SizedBox(
+                  width: 150,
+                  child: StaggerIn(
+                    key: ValueKey('album-${album.id}'),
+                    index: i,
+                    child: GestureDetector(
+                      onTap: () => widget.onOpenAlbum(album.id),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(10),
+                            child: CoverArt(
+                              url: widget.api.cover(album.id, album.hasCover),
+                              size: 150,
+                              radius: 10,
+                              animate: false,
+                            ),
+                          ),
+                          const SizedBox(height: S.sm),
+                          Text(
+                            album.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: T.bodyStrong(p.ink),
+                          ),
+                          Text(
+                            '${album.artist} · ${album.year ?? '—'}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: T.micro(p.mute),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
             ),
-            delegate: SliverChildBuilderDelegate((context, i) {
-              final a = albums[i];
-              return StaggerIn(
-                key: ValueKey('album-${a.id}'),
-                index: i,
-                child: AlbumCard(
-                  album: a,
-                  coverUrl: widget.api.cover(a.id, a.hasCover),
-                  onPlay: () =>
-                      widget.player.play(a.tracks.first, queue: a.tracks),
-                  onRadio: () => widget.onRadio(a.tracks.first),
-                  onOpen: () => widget.onOpenAlbum(a.id),
-                ),
-              );
-            }, childCount: albums.length),
           ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(S.xl, 0, S.xl, S.xxl),
+          sliver: const SliverToBoxAdapter(child: SizedBox(height: S.xs)),
         ),
       ],
     );
@@ -425,6 +566,114 @@ class _AlbumCardState extends State<AlbumCard> {
                 ),
               ],
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One line of the "caught often" column: rank, cover, title, play count.
+/// Deliberately a list and not a card grid — a column of tracks reads faster
+/// than nine tiles and matches how the rest of the app counts things.
+class _FrequentRow extends StatefulWidget {
+  const _FrequentRow({
+    required this.index,
+    required this.title,
+    required this.artist,
+    required this.plays,
+    required this.coverUrl,
+    required this.onPlay,
+    required this.onRadio,
+  });
+
+  final int index;
+  final String title;
+  final String artist;
+  final int plays;
+  final String? coverUrl;
+  final VoidCallback onPlay;
+  final VoidCallback onRadio;
+
+  @override
+  State<_FrequentRow> createState() => _FrequentRowState();
+}
+
+class _FrequentRowState extends State<_FrequentRow> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    final accent = AccentScope.of(context);
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onPlay,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          padding: const EdgeInsets.symmetric(horizontal: S.sm, vertical: 6),
+          decoration: BoxDecoration(
+            color: _hover ? p.soft : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 24,
+                child: Text(
+                  '${widget.index + 1}',
+                  style: T.caption(_hover ? accent : p.ash),
+                ),
+              ),
+              CoverArt(
+                url: widget.coverUrl,
+                size: 38,
+                radius: 7,
+                animate: false,
+              ),
+              const SizedBox(width: S.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: T.bodyStrong(p.ink),
+                    ),
+                    Text(
+                      widget.artist,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: T.micro(p.mute),
+                    ),
+                  ],
+                ),
+              ),
+              if (widget.plays > 0)
+                Padding(
+                  padding: const EdgeInsets.only(right: S.md),
+                  child: Text('${widget.plays}×', style: T.micro(p.ash)),
+                ),
+              AnimatedOpacity(
+                duration: const Duration(milliseconds: 140),
+                opacity: _hover ? 1 : 0,
+                child: Icon(Icons.play_arrow_rounded, size: 20, color: accent),
+              ),
+              const SizedBox(width: S.sm),
+              AnimatedOpacity(
+                duration: const Duration(milliseconds: 140),
+                opacity: _hover ? 1 : 0,
+                child: GestureDetector(
+                  onTap: widget.onRadio,
+                  child: Icon(Icons.radio_rounded, size: 18, color: p.mute),
+                ),
+              ),
+            ],
           ),
         ),
       ),

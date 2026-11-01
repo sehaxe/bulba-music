@@ -543,6 +543,21 @@ class Api {
     return jsonDecode(r.body) as Map<String, dynamic>;
   }
 
+  /// Whether this device can act as a listener: 'ok', 'needs_auth' (server is
+  /// reachable but wants a phrase) or 'unreachable'.
+  Future<String> authStatus() async {
+    try {
+      final r = await _http
+          .get(Uri.parse('$base/api/auth/me'))
+          .timeout(const Duration(seconds: 6));
+      if (r.statusCode == 200) return 'ok';
+      if (r.statusCode == 401) return 'needs_auth';
+      return 'unreachable';
+    } catch (_) {
+      return 'unreachable';
+    }
+  }
+
   Future<Map<String, dynamic>?> me() async {
     final r = await _http
         .get(Uri.parse('$base/api/auth/me'))

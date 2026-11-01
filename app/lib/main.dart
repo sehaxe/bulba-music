@@ -9,6 +9,7 @@ import 'api/client.dart';
 import 'design/tokens.dart';
 import 'player/controller.dart';
 import 'player/likes.dart';
+import 'screens/auth.dart';
 import 'screens/onboarding.dart';
 import 'state/prefs.dart';
 import 'shell.dart';
@@ -51,9 +52,9 @@ class _BulbaAppState extends State<BulbaApp> {
   late final Api api = Api(
     const String.fromEnvironment(
       'BULBA_SERVER',
-      // The phone reaches the same server over Tailscale; on the desktop the
-      // tailnet address works too, so one default suite both.
-      defaultValue: 'http://100.108.226.86:8422',
+      // Desktop talks to its own server over loopback (and is therefore the
+      // owner without a phrase). The phone build passes the tailnet address.
+      defaultValue: 'http://127.0.0.1:8422',
     ),
   );
   late final PlayerController player = PlayerController(api);
@@ -61,6 +62,7 @@ class _BulbaAppState extends State<BulbaApp> {
   Prefs? _prefs;
   bool _ready = false;
   bool _onboarding = false;
+  bool _needsAuth = false;
 
   @override
   void initState() {
@@ -80,10 +82,12 @@ class _BulbaAppState extends State<BulbaApp> {
     final skipOnboarding =
         const bool.fromEnvironment('SHOT_ONBOARD') ||
         Platform.environment['BULBA_SKIP_ONBOARDING'] == '1';
+    final auth = await api.authStatus();
     if (!mounted) return;
     setState(() {
       _prefs = prefs;
-      _onboarding = !prefs.onboardingSeen && !skipOnboarding;
+      _needsAuth = auth == 'needs_auth';
+      _onboarding = !prefs.onboardingSeen && !skipOnboarding && !_needsAuth;
       _ready = true;
     });
   }
@@ -146,6 +150,16 @@ class _BulbaAppState extends State<BulbaApp> {
           themeMode: mode,
           home: !_ready
               ? const ColoredBox(color: Color(0xFF141210))
+              : _needsAuth
+              ? AuthScreen(
+                  api: api,
+                  player: player,
+                  likes: likes,
+                  onSignedIn: (token) async {
+                    await _prefs?.setToken(token);
+                    if (mounted) setState(() => _needsAuth = false);
+                  },
+                )
               : _onboarding
               ? Onboarding(
                   api: api,

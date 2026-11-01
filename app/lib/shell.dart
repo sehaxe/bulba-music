@@ -17,7 +17,6 @@ import 'screens/player_screen.dart';
 import 'screens/liked.dart';
 import 'screens/album.dart';
 import 'screens/artist.dart';
-import 'screens/stats.dart';
 import 'screens/search.dart';
 import 'screens/settings.dart';
 import 'widgets/nav.dart';
@@ -280,47 +279,66 @@ class _ShellState extends State<Shell> {
       action();
     }
 
-    return CallbackShortcuts(
-      bindings: {
-        const SingleActivator(LogicalKeyboardKey.space): () =>
-            guard(widget.player.toggle),
-        const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
-            guard(() => widget.player.skipBy(const Duration(seconds: 5))),
-        const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
-            guard(() => widget.player.skipBy(const Duration(seconds: -5))),
-        const SingleActivator(LogicalKeyboardKey.arrowRight, shift: true): () =>
-            guard(() => widget.player.skipBy(const Duration(seconds: 30))),
-        const SingleActivator(LogicalKeyboardKey.arrowLeft, shift: true): () =>
-            guard(() => widget.player.skipBy(const Duration(seconds: -30))),
-        const SingleActivator(LogicalKeyboardKey.arrowUp): () =>
-            guard(() => widget.player.setVolume(widget.player.volume + 0.05)),
-        const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
-            guard(() => widget.player.setVolume(widget.player.volume - 0.05)),
-        const SingleActivator(LogicalKeyboardKey.keyN): () =>
-            guard(widget.player.next),
-        const SingleActivator(LogicalKeyboardKey.keyP): () =>
-            guard(widget.player.previous),
-        const SingleActivator(LogicalKeyboardKey.keyL): () => guard(() {
-          final t = widget.player.current;
-          if (t != null) widget.likes.toggle(t);
-        }),
-        const SingleActivator(LogicalKeyboardKey.keyQ): () => guard(() {
-          if (widget.player.queue.isEmpty) return;
-          showQueue(
-            context,
-            player: widget.player,
-            api: widget.api,
-            likes: widget.likes,
-          );
-        }),
-        const SingleActivator(LogicalKeyboardKey.keyF): () =>
-            guard(_openPlayer),
-        const SingleActivator(LogicalKeyboardKey.slash): () =>
-            guard(() => setState(() => _tab = 1)),
+    return PopScope(
+      // Android's back gesture pops one place at a time; the app only leaves
+      // when there is nowhere left to go.
+      canPop: _stack.isEmpty && _tab == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_stack.isNotEmpty) {
+          _back();
+        } else if (_tab != 0) {
+          _select(0);
+        }
       },
-      child: AccentScope(
-        color: _accent,
-        child: Focus(autofocus: true, child: _scaffold(p, wide)),
+      child: CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.space): () =>
+              guard(widget.player.toggle),
+          const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
+              guard(() => widget.player.skipBy(const Duration(seconds: 5))),
+          const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
+              guard(() => widget.player.skipBy(const Duration(seconds: -5))),
+          const SingleActivator(
+            LogicalKeyboardKey.arrowRight,
+            shift: true,
+          ): () =>
+              guard(() => widget.player.skipBy(const Duration(seconds: 30))),
+          const SingleActivator(
+            LogicalKeyboardKey.arrowLeft,
+            shift: true,
+          ): () =>
+              guard(() => widget.player.skipBy(const Duration(seconds: -30))),
+          const SingleActivator(LogicalKeyboardKey.arrowUp): () =>
+              guard(() => widget.player.setVolume(widget.player.volume + 0.05)),
+          const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
+              guard(() => widget.player.setVolume(widget.player.volume - 0.05)),
+          const SingleActivator(LogicalKeyboardKey.keyN): () =>
+              guard(widget.player.next),
+          const SingleActivator(LogicalKeyboardKey.keyP): () =>
+              guard(widget.player.previous),
+          const SingleActivator(LogicalKeyboardKey.keyL): () => guard(() {
+            final t = widget.player.current;
+            if (t != null) widget.likes.toggle(t);
+          }),
+          const SingleActivator(LogicalKeyboardKey.keyQ): () => guard(() {
+            if (widget.player.queue.isEmpty) return;
+            showQueue(
+              context,
+              player: widget.player,
+              api: widget.api,
+              likes: widget.likes,
+            );
+          }),
+          const SingleActivator(LogicalKeyboardKey.keyF): () =>
+              guard(_openPlayer),
+          const SingleActivator(LogicalKeyboardKey.slash): () =>
+              guard(() => setState(() => _tab = 1)),
+        },
+        child: AccentScope(
+          color: _accent,
+          child: Focus(autofocus: true, child: _scaffold(p, wide)),
+        ),
       ),
     );
   }
@@ -366,14 +384,17 @@ class _ShellState extends State<Shell> {
                   : body,
             ),
             if (widget.player.current != null)
-              PlayerBar(
-                player: widget.player,
-                api: widget.api,
-                likes: widget.likes,
-                onOpen: _openPlayer,
-                accent: _accent,
-                height: wide ? 68 : 60,
-                showVolume: wide,
+              Padding(
+                padding: EdgeInsets.only(bottom: wide ? 0 : S.xs),
+                child: PlayerBar(
+                  player: widget.player,
+                  api: widget.api,
+                  likes: widget.likes,
+                  onOpen: _openPlayer,
+                  accent: _accent,
+                  height: wide ? 68 : 60,
+                  showVolume: wide,
+                ),
               ),
             if (!wide)
               FloatingNav(index: _tab, onSelect: _select, accent: _accent),
@@ -474,6 +495,7 @@ class _ShellState extends State<Shell> {
           accent: _accent,
           onOpen: _openCollection,
           onOpenAlbum: _openAlbum,
+          onOpenLibrary: () => _select(2),
         );
       case 1:
         return SearchScreen(
@@ -507,19 +529,16 @@ class _ShellState extends State<Shell> {
             ),
           ),
         );
-      case 4:
-        return StatsScreen(
-          api: widget.api,
-          onOpenAlbum: _openAlbumById,
-          onPlayTrack: _playStatTrack,
-        );
       default:
         return SettingsScreen(
           api: widget.api,
           player: widget.player,
           prefs: widget.prefs,
           themeMode: widget.themeMode,
+          likes: widget.likes,
           onRescan: _rescan,
+          onOpenAlbum: _openAlbumById,
+          onPlayTrack: _playStatTrack,
         );
     }
   }

@@ -316,3 +316,23 @@ async fn liking_a_missing_track_is_404() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn a_remote_device_without_a_phrase_gets_401() {
+    let fx = fixture();
+    let mut req = Request::get("/api/likes").body(Body::empty()).unwrap();
+    // A tailnet address instead of loopback: this is the phone.
+    req.extensions_mut().insert(axum::extract::ConnectInfo(
+        std::net::SocketAddr::from(([100, 64, 0, 1], 5555)),
+    ));
+    let resp = router(fx.state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // The same request from this machine is the owner, no phrase needed.
+    let mut req = Request::get("/api/likes").body(Body::empty()).unwrap();
+    req.extensions_mut().insert(axum::extract::ConnectInfo(
+        std::net::SocketAddr::from(([127, 0, 0, 1], 5555)),
+    ));
+    let resp = router(fx.state).oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}

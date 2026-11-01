@@ -4,10 +4,14 @@ import '../api/client.dart';
 import '../design/components.dart';
 import '../design/tokens.dart';
 import '../player/controller.dart';
+import '../player/likes.dart';
 import '../state/prefs.dart';
+import 'stats.dart';
 
-/// One page with everything that can be changed, grouped by what it affects.
-/// Values that are not wired yet say so instead of pretending to work.
+/// Settings is a list of doors, not one long scroll: each category opens on
+/// its own page and back returns to the list.
+enum _Door { library, sound, looks, keys, sync, stats, about }
+
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
     super.key,
@@ -15,34 +19,55 @@ class SettingsScreen extends StatefulWidget {
     required this.player,
     required this.prefs,
     required this.themeMode,
+    required this.likes,
     required this.onRescan,
+    required this.onOpenAlbum,
+    required this.onPlayTrack,
   });
 
   final Api api;
   final PlayerController player;
   final Prefs prefs;
   final ValueNotifier<ThemeMode> themeMode;
+  final LikesStore likes;
   final Future<void> Function() onRescan;
+  final void Function(int albumId, String title, String artist) onOpenAlbum;
+  final void Function(StatTrack) onPlayTrack;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  _Door? _open;
+  Map<String, dynamic>? _info;
   String? _token;
+  String _note = '';
   late final TextEditingController _serverController = TextEditingController(
     text: widget.api.base,
   );
-  Map<String, dynamic>? _info;
-  bool _renaming = false;
-  String _embedNote = '';
-  Map<String, dynamic>? _renamePreview;
 
   @override
   void initState() {
     super.initState();
     _token = widget.prefs.token;
     _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final info = await widget.api.info();
+      if (mounted) setState(() => _info = info);
+    } catch (_) {}
+  }
+
+  Future<void> _saveServer(String value) async {
+    final trimmed = value.trim().replaceAll(RegExp(r'/+$'), '');
+    if (trimmed.isEmpty) return;
+    widget.api.base = trimmed;
+    await widget.prefs.setServer(trimmed);
+    await _load();
+    if (mounted) setState(() => _note = 'сервер: $trimmed');
   }
 
   Future<void> _register() async {
@@ -55,12 +80,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       await _showPhrase(phrase);
     } catch (e) {
-      if (mounted) setState(() => _embedNote = 'ошибка: $e');
+      if (mounted) setState(() => _note = 'ошибка: $e');
     }
   }
 
   Future<void> _showPhrase(String phrase) async {
-    final words = phrase.split(' ');
+    final words = phrase.split(' ').where((w) => w.isNotEmpty).toList();
+    if (!mounted) return;
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -169,57 +195,71 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       await _load();
     } catch (e) {
-      if (mounted) {
-        setState(() => _embedNote = 'войти не вышло: $e');
-      }
+      if (mounted) setState(() => _note = 'войти не вышло: $e');
     }
-  }
-
-  Future<void> _load() async {
-    try {
-      final info = await widget.api.info();
-      if (mounted) setState(() => _info = info);
-    } catch (_) {}
-  }
-
-  Future<void> _saveServer(String value) async {
-    final trimmed = value.trim().replaceAll(RegExp(r'/+$'), '');
-    if (trimmed.isEmpty) return;
-    widget.api.base = trimmed;
-    await widget.prefs.setServer(trimmed);
-    await _load();
-    if (mounted) setState(() => _embedNote = 'сервер: $trimmed');
-  }
-
-  Future<void> _previewRename() async {
-    setState(() => _renaming = true);
-    try {
-      final out = await widget.api.normalize(apply: false);
-      setState(() => _renamePreview = out);
-    } catch (e) {
-      setState(() => _embedNote = 'ошибка: $e');
-    }
-    if (mounted) setState(() => _renaming = false);
-  }
-
-  Future<void> _applyRename() async {
-    setState(() => _renaming = true);
-    try {
-      final out = await widget.api.normalize(apply: true);
-      setState(() {
-        _renamePreview = out;
-        _embedNote = 'переименовано: ${out['applied']}';
-      });
-      await _load();
-    } catch (e) {
-      setState(() => _embedNote = 'ошибка: $e');
-    }
-    if (mounted) setState(() => _renaming = false);
   }
 
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    if (_open != null) {
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(S.xl, S.xl, S.xl, S.xxl),
+        children: [
+          Row(
+            children: [
+              _BackChip(onTap: () => setState(() => _open = null)),
+              const SizedBox(width: S.md),
+              Text(_title(_open!), style: T.displayM(p.ink)),
+            ],
+          ),
+          const SizedBox(height: S.xl),
+          ..._content(_open!, p),
+        ],
+      );
+    }
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(S.xl, S.xxl, S.xl, S.xxl),
+      children: [
+        Text('настройки', style: T.displayM(p.ink)),
+        const SizedBox(height: S.xl),
+        for (final door in _Door.values)
+          _DoorRow(
+            door: door,
+            hint: _hint(door),
+            onTap: () => setState(() => _open = door),
+          ),
+      ],
+    );
+  }
+
+  String _title(_Door d) => switch (d) {
+    _Door.library => 'библиотека',
+    _Door.sound => 'звук',
+    _Door.looks => 'интерфейс',
+    _Door.keys => 'клавиатура',
+    _Door.sync => 'синхронизация',
+    _Door.stats => 'статистика',
+    _Door.about => 'о системе',
+  };
+
+  String _hint(_Door d) {
+    final stats = _info?['stats'] as Map<String, dynamic>? ?? {};
+    return switch (d) {
+      _Door.library =>
+        '${stats['tracks'] ?? 0} треков · ${stats['albums'] ?? 0} альбомов',
+      _Door.sound => 'громкость, кроссфейд, поток',
+      _Door.looks => 'тёмная или светлая, акцент из обложки',
+      _Door.keys => 'горячие клавиши',
+      _Door.sync =>
+        _token == null ? 'локальное устройство' : 'привязано к фразе',
+      _Door.stats => 'что и когда играло',
+      _Door.about => '${_info?['version'] ?? '—'} · ${widget.api.base}',
+    };
+  }
+
+  List<Widget> _content(_Door door, Palette p) {
     final stats = _info?['stats'] as Map<String, dynamic>? ?? {};
     final libraries =
         (_info?['libraries'] as List<dynamic>?)?.map((e) => '$e').toList() ??
@@ -227,279 +267,221 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final tracks = stats['tracks'] ?? 0;
     final albums = stats['albums'] ?? 0;
     final lossless = stats['lossless'] ?? 0;
-    final embedded = stats['embedded'] ?? 0;
     final bytes = (stats['bytes'] as num?)?.toDouble() ?? 0;
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(S.xl, S.xxl, S.xl, S.xxl),
-      children: [
-        Text('настройки', style: T.displayM(p.ink)),
-        const SizedBox(height: S.xxl),
-
-        _Section(
-          title: 'библиотека',
-          children: [
-            for (final path in libraries)
-              Padding(
-                padding: const EdgeInsets.only(bottom: S.xs),
-                child: Row(
-                  children: [
-                    Icon(Icons.folder_outlined, size: 16, color: p.mute),
-                    const SizedBox(width: S.sm),
-                    Expanded(
-                      child: Text(
-                        path,
-                        style: T.caption(p.body),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            if (libraries.isEmpty)
-              Text(
-                'папки не заданы — сервер запущен без --library',
-                style: T.caption(p.ash),
-              ),
-            const SizedBox(height: S.md),
-            Text(
-              'Сервер сам читает папку библиотеки при старте и каждые пять минут. '
-              'Клиент не сканирует диск никогда — с телефона он о папках и не знает.',
-              style: T.caption(p.mute),
-            ),
-            if (_embedNote.isNotEmpty) ...[
-              const SizedBox(height: S.sm),
-              Text(_embedNote, style: T.micro(p.mute)),
-            ],
-            const SizedBox(height: S.md),
-            _Row(label: 'треков', value: '$tracks'),
-            _Row(label: 'альбомов', value: '$albums'),
-            _Row(label: 'lossless', value: '$lossless из $tracks'),
-            _Row(label: 'размер', value: _bytes(bytes)),
-            _Row(label: 'с признаками', value: '$embedded из $tracks'),
-          ],
-        ),
-
-        _Section(
-          title: 'имена файлов',
-          children: [
-            Text(
-              'Внутри папки альбома — «01 - Название.flac», вне её — '
-              '«Артист - Альбом - 01 - Название.flac». Существующие файлы '
-              'не перезаписываются: совпадение это конфликт, а не слияние.',
-              style: T.caption(p.mute),
-            ),
-            const SizedBox(height: S.md),
-            Row(
-              children: [
-                PillButton(
-                  icon: Icons.visibility_outlined,
-                  label: _renaming ? '…' : 'посмотреть план',
-                  onTap: _renaming ? null : _previewRename,
-                ),
-                const SizedBox(width: S.md),
-                PillButton(
-                  icon: Icons.drive_file_rename_outline_rounded,
-                  label: 'переименовать',
-                  onTap: _renaming ? null : _applyRename,
-                ),
-              ],
-            ),
-            if (_renamePreview != null) ...[
-              const SizedBox(height: S.md),
-              _Row(
-                label: 'к переименованию',
-                value:
-                    '${_renamePreview!['planned'] is List ? (_renamePreview!['planned'] as List).length : 0}',
-              ),
-              _Row(
-                label: 'конфликтов',
-                value:
-                    '${_renamePreview!['conflicts'] is List ? (_renamePreview!['conflicts'] as List).length : 0}',
-              ),
-              for (final r
-                  in ((_renamePreview!['planned'] as List?) ?? const []).take(
-                    6,
-                  ))
-                Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: Text(
-                    '${('${r['from']}').split('/').last}  →  ${('${r['to']}').split('/').last}',
-                    style: T.micro(p.ash),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-            ],
-          ],
-        ),
-
-        _Section(
-          title: 'звук',
-          children: [
-            _SliderRow(
-              label: 'громкость',
-              value: widget.player.volume,
-              max: 1,
-              display: '${(widget.player.volume * 100).round()}%',
-              onChanged: (v) {
-                widget.player.setVolume(v);
-                widget.prefs.setVolume(v);
-                setState(() {});
-              },
-            ),
-            _SliderRow(
-              label: 'кроссфейд',
-              value: widget.prefs.crossfade.toDouble(),
-              max: 12,
-              display: widget.prefs.crossfade == 0
-                  ? 'выкл'
-                  : '${widget.prefs.crossfade} с',
-              onChanged: (v) {
-                widget.prefs.setCrossfade(v.round());
-                widget.player.crossfade = v.round();
-                setState(() {});
-              },
-            ),
-            const SizedBox(height: S.xs),
-            Text(
-              'Два плеера: следующий трек стартует заранее на втором, громкость '
-              'идёт по равномощной кривой cos/sin — на середине не проваливается '
-              'на 3 дБ, как у линейного кроссфейда.',
-              style: T.micro(p.ash),
-            ),
-            const SizedBox(height: S.sm),
-            _Row(label: 'поток', value: 'flac с сервера · opus по требованию'),
-          ],
-        ),
-
-        _Section(
-          title: 'интерфейс',
-          children: [
-            ValueListenableBuilder<ThemeMode>(
-              valueListenable: widget.themeMode,
-              builder: (context, mode, _) => Row(
+    switch (door) {
+      case _Door.library:
+        return [
+          for (final path in libraries)
+            Padding(
+              padding: const EdgeInsets.only(bottom: S.xs),
+              child: Row(
                 children: [
-                  for (final entry in const [
-                    (ThemeMode.dark, 'тёмная'),
-                    (ThemeMode.light, 'светлая'),
-                    (ThemeMode.system, 'системная'),
-                  ])
-                    Padding(
-                      padding: const EdgeInsets.only(right: S.sm),
-                      child: _Choice(
-                        label: entry.$2,
-                        selected: mode == entry.$1,
-                        onTap: () {
-                          widget.themeMode.value = entry.$1;
-                          widget.prefs.setThemeMode(switch (entry.$1) {
-                            ThemeMode.light => 'light',
-                            ThemeMode.system => 'system',
-                            _ => 'dark',
-                          });
-                        },
-                      ),
+                  Icon(Icons.folder_outlined, size: 16, color: p.mute),
+                  const SizedBox(width: S.sm),
+                  Expanded(
+                    child: Text(
+                      path,
+                      style: T.caption(p.body),
+                      overflow: TextOverflow.ellipsis,
                     ),
+                  ),
                 ],
               ),
             ),
-            const SizedBox(height: S.md),
-            Text(
-              'обложка задаёт акцент: палитра вынимается из арта и '
-              'переходит вместе с треком.',
-              style: T.micro(p.ash),
-            ),
-          ],
-        ),
-
-        _Section(
-          title: 'клавиатура',
-          children: const [
-            _KeyRow(keys: 'space', what: 'плей / пауза'),
-            _KeyRow(keys: '← →', what: 'назад / вперёд 5 с'),
-            _KeyRow(keys: 'shift + ← →', what: '30 с'),
-            _KeyRow(keys: '↑ ↓', what: 'громкость'),
-            _KeyRow(keys: 'n / p', what: 'следующий / предыдущий'),
-            _KeyRow(keys: 'l', what: 'лайк текущего'),
-            _KeyRow(keys: 'q', what: 'очередь'),
-            _KeyRow(keys: 'f', what: 'полный плеер'),
-            _KeyRow(keys: '/', what: 'поиск'),
-          ],
-        ),
-
-        _Section(
-          title: 'синхронизация',
-          children: [
-            Text(
-              'Одна фраза на все устройства: зарегистрируйся на компьютере, '
-              'введи те же двенадцать слов на телефоне — и это один и тот же '
-              'слушатель с историей, лайками и подборками.',
-              style: T.caption(p.mute),
-            ),
-            const SizedBox(height: S.md),
-            _Row(
-              label: 'устройство',
-              value: _token == null ? 'локальное, без аккаунта' : 'привязано',
-            ),
+          const SizedBox(height: S.md),
+          Text(
+            'Сервер сам читает папку библиотеки при старте и каждые пять минут. '
+            'Клиент не сканирует диск никогда — с телефона он о папках и не знает.',
+            style: T.caption(p.mute),
+          ),
+          const SizedBox(height: S.lg),
+          _Row(label: 'треков', value: '$tracks'),
+          _Row(label: 'альбомов', value: '$albums'),
+          _Row(label: 'lossless', value: '$lossless из $tracks'),
+          _Row(label: 'размер', value: _bytes(bytes)),
+          _Row(
+            label: 'с признаками',
+            value: '${stats['embedded'] ?? 0} из $tracks',
+          ),
+          if (_note.isNotEmpty) ...[
             const SizedBox(height: S.sm),
-            Row(
-              children: [
-                PillButton(
-                  icon: Icons.key_rounded,
-                  label: 'создать фразу',
-                  onTap: _register,
-                ),
-                const SizedBox(width: S.md),
-                PillButton(
-                  icon: Icons.login_rounded,
-                  label: 'ввести фразу',
-                  onTap: _login,
-                ),
-              ],
-            ),
+            Text(_note, style: T.micro(p.mute)),
           ],
-        ),
+        ];
 
-        _Section(
-          title: 'о системе',
-          children: [
-            Row(
+      case _Door.sound:
+        return [
+          _SliderRow(
+            label: 'громкость',
+            value: widget.player.volume,
+            max: 1,
+            display: '${(widget.player.volume * 100).round()}%',
+            onChanged: (v) {
+              widget.player.setVolume(v);
+              widget.prefs.setVolume(v);
+              setState(() {});
+            },
+          ),
+          _SliderRow(
+            label: 'кроссфейд',
+            value: widget.prefs.crossfade.toDouble(),
+            max: 12,
+            display: widget.prefs.crossfade == 0
+                ? 'выкл'
+                : '${widget.prefs.crossfade} с',
+            onChanged: (v) {
+              widget.prefs.setCrossfade(v.round());
+              widget.player.crossfade = v.round();
+              setState(() {});
+            },
+          ),
+          const SizedBox(height: S.xs),
+          Text(
+            'Два плеера: следующий трек стартует заранее на втором, громкость '
+            'идёт по равномощной кривой cos/sin — на середине не проваливается '
+            'на 3 дБ, как у линейного кроссфейда.',
+            style: T.micro(p.ash),
+          ),
+          const SizedBox(height: S.lg),
+          _Row(label: 'поток', value: 'flac с сервера · opus по требованию'),
+        ];
+
+      case _Door.looks:
+        return [
+          ValueListenableBuilder<ThemeMode>(
+            valueListenable: widget.themeMode,
+            builder: (context, mode, _) => Wrap(
+              spacing: S.sm,
+              runSpacing: S.sm,
               children: [
-                SizedBox(
-                  width: 170,
-                  child: Text('сервер', style: T.caption(p.mute)),
-                ),
-                Expanded(
-                  child: TextField(
-                    controller: _serverController,
-                    style: T.body(p.body),
-                    cursorColor: AccentScope.of(context),
-                    decoration: InputDecoration(
-                      isDense: true,
-                      hintText: 'http://100.x.y.z:8422',
-                      hintStyle: T.body(p.ash),
-                    ),
-                    onSubmitted: _saveServer,
+                for (final entry in const [
+                  (ThemeMode.dark, 'тёмная'),
+                  (ThemeMode.light, 'светлая'),
+                  (ThemeMode.system, 'системная'),
+                ])
+                  _Choice(
+                    label: entry.$2,
+                    selected: mode == entry.$1,
+                    onTap: () {
+                      widget.themeMode.value = entry.$1;
+                      widget.prefs.setThemeMode(switch (entry.$1) {
+                        ThemeMode.light => 'light',
+                        ThemeMode.system => 'system',
+                        _ => 'dark',
+                      });
+                    },
                   ),
-                ),
-                const SizedBox(width: S.sm),
-                PillButton(
-                  icon: Icons.save_rounded,
-                  label: 'сохранить',
-                  onTap: () => _saveServer(_serverController.text),
-                ),
               ],
             ),
-            _Row(label: 'версия', value: '${_info?['version'] ?? '—'}'),
-            _Row(
-              label: 'модель вкуса',
-              value: '${_info?['features_model'] ?? 'dsp-v1'}',
+          ),
+          const SizedBox(height: S.lg),
+          Text(
+            'Обложка задаёт акцент: палитра вынимается из арта и переходит на '
+            'весь интерфейс вместе с треком.',
+            style: T.micro(p.ash),
+          ),
+        ];
+
+      case _Door.keys:
+        return const [
+          _KeyRow(keys: 'space', what: 'плей / пауза'),
+          _KeyRow(keys: '← →', what: 'назад / вперёд 5 с'),
+          _KeyRow(keys: 'shift + ← →', what: '30 с'),
+          _KeyRow(keys: '↑ ↓', what: 'громкость'),
+          _KeyRow(keys: 'n / p', what: 'следующий / предыдущий'),
+          _KeyRow(keys: 'l', what: 'лайк текущего'),
+          _KeyRow(keys: 'q', what: 'очередь'),
+          _KeyRow(keys: 'f', what: 'полный плеер'),
+          _KeyRow(keys: '/', what: 'поиск'),
+        ];
+
+      case _Door.sync:
+        return [
+          Text(
+            'Одна фраза на все устройства: зарегистрируйся на компьютере, введи '
+            'те же двенадцать слов на телефоне — и это один и тот же слушатель с '
+            'историей, лайками и подборками.',
+            style: T.caption(p.mute),
+          ),
+          const SizedBox(height: S.md),
+          _Row(
+            label: 'устройство',
+            value: _token == null ? 'локальное, без аккаунта' : 'привязано',
+          ),
+          const SizedBox(height: S.sm),
+          Wrap(
+            spacing: S.sm,
+            runSpacing: S.sm,
+            children: [
+              PillButton(
+                icon: Icons.key_rounded,
+                label: 'создать фразу',
+                onTap: _register,
+              ),
+              PillButton(
+                icon: Icons.login_rounded,
+                label: 'ввести фразу',
+                onTap: _login,
+              ),
+            ],
+          ),
+        ];
+
+      case _Door.stats:
+        return [
+          SizedBox(
+            height: 900,
+            child: StatsScreen(
+              api: widget.api,
+              onOpenAlbum: widget.onOpenAlbum,
+              onPlayTrack: widget.onPlayTrack,
             ),
-            _Row(label: 'ревизия', value: '${stats['rev'] ?? '—'}'),
+          ),
+        ];
+
+      case _Door.about:
+        return [
+          Row(
+            children: [
+              SizedBox(
+                width: 170,
+                child: Text('сервер', style: T.caption(p.mute)),
+              ),
+              Expanded(
+                child: TextField(
+                  controller: _serverController,
+                  style: T.body(p.body),
+                  cursorColor: AccentScope.of(context),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    hintText: 'http://100.x.y.z:8422',
+                    hintStyle: T.body(p.ash),
+                  ),
+                  onSubmitted: _saveServer,
+                ),
+              ),
+              const SizedBox(width: S.sm),
+              PillButton(
+                icon: Icons.save_rounded,
+                label: 'сохранить',
+                onTap: () => _saveServer(_serverController.text),
+              ),
+            ],
+          ),
+          const SizedBox(height: S.md),
+          _Row(label: 'версия', value: '${_info?['version'] ?? '—'}'),
+          _Row(
+            label: 'модель вкуса',
+            value: '${_info?['features_model'] ?? 'dsp-v1'}',
+          ),
+          _Row(label: 'ревизия', value: '${stats['rev'] ?? '—'}'),
+          if (_note.isNotEmpty) ...[
+            const SizedBox(height: S.sm),
+            Text(_note, style: T.micro(p.mute)),
           ],
-        ),
-      ],
-    );
+        ];
+    }
   }
 
   static String _bytes(double b) {
@@ -515,29 +497,99 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
-class _Section extends StatelessWidget {
-  const _Section({required this.title, required this.children});
-  final String title;
-  final List<Widget> children;
+class _DoorRow extends StatefulWidget {
+  const _DoorRow({required this.door, required this.hint, required this.onTap});
+  final _Door door;
+  final String hint;
+  final VoidCallback onTap;
+
+  @override
+  State<_DoorRow> createState() => _DoorRowState();
+}
+
+class _DoorRowState extends State<_DoorRow> {
+  bool _hover = false;
+
+  static IconData _icon(_Door d) => switch (d) {
+    _Door.library => Icons.folder_open_rounded,
+    _Door.sound => Icons.graphic_eq_rounded,
+    _Door.looks => Icons.palette_outlined,
+    _Door.keys => Icons.keyboard_rounded,
+    _Door.sync => Icons.sync_rounded,
+    _Door.stats => Icons.insights_rounded,
+    _Door.about => Icons.info_outline_rounded,
+  };
+
+  static String _label(_Door d) => switch (d) {
+    _Door.library => 'библиотека',
+    _Door.sound => 'звук',
+    _Door.looks => 'интерфейс',
+    _Door.keys => 'клавиатура',
+    _Door.sync => 'синхронизация',
+    _Door.stats => 'статистика',
+    _Door.about => 'о системе',
+  };
 
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: S.xxl),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    final accent = AccentScope.of(context);
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          margin: const EdgeInsets.only(bottom: S.sm),
+          padding: const EdgeInsets.symmetric(horizontal: S.lg, vertical: S.md),
+          decoration: BoxDecoration(
+            color: _hover ? p.soft : Colors.transparent,
+            border: Border.all(color: p.hairline),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
             children: [
-              Text(title, style: T.heading(p.ink)),
+              Icon(_icon(widget.door), size: 18, color: accent),
               const SizedBox(width: S.md),
-              Expanded(child: Hr(color: p.hairline)),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_label(widget.door), style: T.bodyStrong(p.ink)),
+                    Text(widget.hint, style: T.micro(p.ash)),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right_rounded, size: 18, color: p.mute),
             ],
           ),
-          const SizedBox(height: S.md),
-          ...children,
-        ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BackChip extends StatelessWidget {
+  const _BackChip({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          decoration: BoxDecoration(
+            border: Border.all(color: p.hairline),
+            borderRadius: BorderRadius.circular(9),
+          ),
+          child: Icon(Icons.arrow_back_rounded, size: 16, color: p.mute),
+        ),
       ),
     );
   }
@@ -615,6 +667,7 @@ class _SliderRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final accent = AccentScope.of(context);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
@@ -627,10 +680,10 @@ class _SliderRow extends StatelessWidget {
                 trackHeight: 3,
                 thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
                 overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
-                activeTrackColor: AccentScope.of(context),
+                activeTrackColor: accent,
                 inactiveTrackColor: p.hairlineStrong,
-                thumbColor: AccentScope.of(context),
-                overlayColor: AccentScope.of(context).withValues(alpha: 0.12),
+                thumbColor: accent,
+                overlayColor: accent.withValues(alpha: 0.12),
               ),
               child: Slider(
                 value: value.clamp(0, max),
