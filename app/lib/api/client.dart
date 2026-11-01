@@ -901,3 +901,145 @@ List<Album> albumsOf(List<Track> tracks) {
   );
   return albums;
 }
+
+/// A playlist as the server describes it: name, visibility, size, owner.
+class Playlist {
+  const Playlist({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.isPublic,
+    required this.tracks,
+    required this.durationMs,
+    required this.owner,
+    required this.mine,
+    required this.liked,
+    required this.coverAlbum,
+    required this.hasCover,
+  });
+
+  final int id;
+  final String name;
+  final String description;
+  final bool isPublic;
+  final int tracks;
+  final int durationMs;
+  final String owner;
+  final bool mine;
+  final bool liked;
+  final int? coverAlbum;
+  final bool hasCover;
+
+  factory Playlist.fromJson(Map<String, dynamic> j) => Playlist(
+    id: j['id'] as int,
+    name: j['name'] as String,
+    description: (j['description'] ?? '') as String,
+    isPublic: (j['is_public'] ?? false) as bool,
+    tracks: (j['tracks'] ?? 0) as int,
+    durationMs: (j['duration_ms'] ?? 0) as int,
+    owner: (j['owner'] ?? '') as String,
+    mine: (j['mine'] ?? false) as bool,
+    liked: (j['liked'] ?? false) as bool,
+    coverAlbum: j['cover_album'] as int?,
+    hasCover: (j['has_cover'] ?? false) as bool,
+  );
+}
+
+extension PlaylistApi on Api {
+  Future<List<Playlist>> playlists() async {
+    final r = await _http
+        .get(Uri.parse('$base/api/playlists'))
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) throw ApiException('playlists → ${r.statusCode}');
+    return (jsonDecode(r.body) as List<dynamic>)
+        .map((e) => Playlist.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<List<Playlist>> likedPlaylists() async {
+    final r = await _http
+        .get(Uri.parse('$base/api/likes/playlists'))
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) return const [];
+    return (jsonDecode(r.body) as List<dynamic>)
+        .map((e) => Playlist.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<int> createPlaylist(String name, {bool isPublic = false}) async {
+    final r = await _http
+        .post(
+          Uri.parse('$base/api/playlists'),
+          headers: {'content-type': 'application/json'},
+          body: jsonEncode({'name': name, 'is_public': isPublic}),
+        )
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) throw ApiException('playlist → ${r.statusCode}');
+    return (jsonDecode(r.body) as Map<String, dynamic>)['id'] as int;
+  }
+
+  Future<void> patchPlaylist(
+    int id, {
+    String? name,
+    String? description,
+    bool? isPublic,
+  }) async {
+    final r = await _http
+        .patch(
+          Uri.parse('$base/api/playlists/$id'),
+          headers: {'content-type': 'application/json'},
+          body: jsonEncode({
+            if (name != null) 'name': name,
+            if (description != null) 'description': description,
+            if (isPublic != null) 'is_public': isPublic,
+          }),
+        )
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) throw ApiException('playlist → ${r.statusCode}');
+  }
+
+  Future<void> deletePlaylist(int id) async {
+    final r = await _http
+        .delete(Uri.parse('$base/api/playlists/$id'))
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) throw ApiException('playlist → ${r.statusCode}');
+  }
+
+  Future<List<Track>> playlistTracks(int id) async {
+    final r = await _http
+        .get(Uri.parse('$base/api/playlists/$id'))
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) throw ApiException('playlist → ${r.statusCode}');
+    final j = jsonDecode(r.body) as Map<String, dynamic>;
+    return (j['tracks'] as List<dynamic>)
+        .map((e) => Track.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> addToPlaylist(int id, int trackId) async {
+    final r = await _http
+        .post(
+          Uri.parse('$base/api/playlists/$id/tracks'),
+          headers: {'content-type': 'application/json'},
+          body: jsonEncode({'track_id': trackId}),
+        )
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) throw ApiException('playlist → ${r.statusCode}');
+  }
+
+  Future<void> removeFromPlaylist(int id, int trackId) async {
+    final r = await _http
+        .delete(Uri.parse('$base/api/playlists/$id/tracks/$trackId'))
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) throw ApiException('playlist → ${r.statusCode}');
+  }
+
+  Future<void> likePlaylist(int id, {bool on = true}) async {
+    final uri = Uri.parse('$base/api/likes/playlists/$id');
+    final r = on
+        ? await _http.post(uri).timeout(const Duration(seconds: 15))
+        : await _http.delete(uri).timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200)
+      throw ApiException('playlist like → ${r.statusCode}');
+  }
+}

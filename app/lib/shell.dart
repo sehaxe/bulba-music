@@ -14,6 +14,7 @@ import 'screens/collection.dart';
 import 'screens/home.dart';
 import 'screens/library.dart';
 import 'screens/player_screen.dart';
+import 'screens/playlists.dart';
 import 'screens/liked.dart';
 import 'screens/album.dart';
 import 'screens/artist.dart';
@@ -42,29 +43,36 @@ class Shell extends StatefulWidget {
   State<Shell> createState() => _ShellState();
 }
 
-enum _PlaceKind { collection, artist, album }
+enum _PlaceKind { collection, artist, album, playlist }
 
 /// One entry on the navigation stack.
 class _Place {
-  _Place.of(this.collection)
+  _Place.of(Collection this.collection)
     : kind = _PlaceKind.collection,
       artistId = null,
-      albumId = null;
-  _Place.artist(int id)
-    : kind = _PlaceKind.artist,
-      artistId = id,
       albumId = null,
-      collection = null;
-  _Place.album(int id)
+      playlist = null;
+  _Place.artist(int this.artistId)
+    : kind = _PlaceKind.artist,
+      collection = null,
+      albumId = null,
+      playlist = null;
+  _Place.album(int this.albumId)
     : kind = _PlaceKind.album,
+      collection = null,
       artistId = null,
-      albumId = id,
-      collection = null;
+      playlist = null;
+  _Place.playlist(Playlist this.playlist)
+    : kind = _PlaceKind.playlist,
+      collection = null,
+      artistId = null,
+      albumId = null;
 
   final _PlaceKind kind;
   final Collection? collection;
   final int? artistId;
   final int? albumId;
+  final Playlist? playlist;
 }
 
 class _ShellState extends State<Shell> {
@@ -176,6 +184,9 @@ class _ShellState extends State<Shell> {
   void _openArtist(int id) => setState(() => _stack.add(_Place.artist(id)));
 
   void _openAlbum(int id) => setState(() => _stack.add(_Place.album(id)));
+
+  void _openPlaylist(Playlist p) =>
+      setState(() => _stack.add(_Place.playlist(p)));
 
   void _openCollection(Collection c) =>
       setState(() => _stack.add(_Place.of(c)));
@@ -462,6 +473,17 @@ class _ShellState extends State<Shell> {
         onBack: _back,
       );
     }
+    final playlist = _stack.isEmpty ? null : _stack.last.playlist;
+    if (playlist != null) {
+      return PlaylistScreen(
+        api: widget.api,
+        player: widget.player,
+        likes: widget.likes,
+        playlist: playlist,
+        onRadio: _startRadio,
+        onBack: _back,
+      );
+    }
     if (_albumId != null) {
       return AlbumScreen(
         api: widget.api,
@@ -521,6 +543,7 @@ class _ShellState extends State<Shell> {
           player: widget.player,
           likes: widget.likes,
           onRadio: _startRadio,
+          onOpenPlaylist: _openPlaylist,
           onOpenCollection: (tracks, title) => _openCollection(
             Collection(
               title: title,

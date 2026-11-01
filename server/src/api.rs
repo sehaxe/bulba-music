@@ -36,6 +36,21 @@ pub fn router(state: AppState) -> Router {
         .route("/api/likes", get(list_likes))
         .route("/api/likes/ids", get(like_ids))
         .route("/api/likes/{id}", post(add_like).delete(remove_like))
+        .route("/api/playlists", get(list_playlists).post(create_playlist))
+        .route(
+            "/api/playlists/{id}",
+            get(get_playlist).patch(patch_playlist).delete(delete_playlist),
+        )
+        .route("/api/playlists/{id}/tracks", post(add_playlist_track))
+        .route(
+            "/api/playlists/{id}/tracks/{track_id}",
+            axum::routing::delete(remove_playlist_track),
+        )
+        .route("/api/likes/playlists", get(list_playlist_likes))
+        .route(
+            "/api/likes/playlists/{id}",
+            post(like_playlist).delete(unlike_playlist),
+        )
         .route("/api/artists", get(list_artists))
         .route("/api/artists/{id}", get(get_artist))
         .route("/api/albums", get(list_albums))
@@ -140,11 +155,11 @@ pub struct Track {
     pub rev: i64,
 }
 
-const TRACK_COLUMNS: &str = "id, title, artist, album, album_id, has_cover, year, disc,
+pub const TRACK_COLUMNS: &str = "id, title, artist, album, album_id, has_cover, year, disc,
     track_no, duration_ms, codec, bitrate, sample_rate, bits, channels, bytes, master_count,
     created_at, rev";
 
-fn map_track(r: &rusqlite::Row) -> rusqlite::Result<Track> {
+pub fn map_track(r: &rusqlite::Row) -> rusqlite::Result<Track> {
     Ok(Track {
         id: r.get(0)?,
         title: r.get(1)?,
@@ -512,6 +527,200 @@ async fn remove_artist_like(
     })
     .await??;
     Ok(Json(json!({"liked": false})))
+}
+
+async fn list_playlists(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<Vec<crate::playlists::Playlist>>, ApiError> {
+    let db = st.db.clone();
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<crate::playlists::Playlist>> {
+        let conn = db.open()?;
+        let me = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
+        crate::playlists::list(&conn, me)
+    })
+    .await??;
+    Ok(Json(out))
+}
+
+async fn list_playlist_likes(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<Vec<crate::playlists::Playlist>>, ApiError> {
+    let db = st.db.clone();
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<crate::playlists::Playlist>> {
+        let conn = db.open()?;
+        let me = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
+        crate::playlists::liked(&conn, me)
+    })
+    .await??;
+    Ok(Json(out))
+}
+
+async fn get_playlist(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<i64>,
+) -> Result<Json<crate::playlists::PlaylistPage>, ApiError> {
+    let db = st.db.clone();
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<crate::playlists::PlaylistPage>> {
+        let conn = db.open()?;
+        let me = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
+        crate::playlists::get(&conn, me, id)
+    })
+    .await??;
+    out.map(Json).ok_or_else(|| ApiError::not_found("playlist"))
+}
+
+async fn create_playlist(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+    Json(new): Json<crate::playlists::NewPlaylist>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    let id = tokio::task::spawn_blocking(move || -> anyhow::Result<i64> {
+        let conn = db.open()?;
+        let me = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
+        crate::playlists::create(&conn, me, &new)
+    })
+    .await??;
+    Ok(Json(json!({ "id": id })))
+}
+
+async fn patch_playlist(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<i64>,
+    Json(patch): Json<crate::playlists::PlaylistPatch>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    let ok = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let conn = db.open()?;
+        let me = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
+        crate::playlists::update(&conn, me, id, &patch)
+    })
+    .await??;
+    if !ok {
+        return Err(ApiError::forbidden("не твой плейлист"));
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn delete_playlist(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    let ok = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let conn = db.open()?;
+        let me = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
+        crate::playlists::delete(&conn, me, id)
+    })
+    .await??;
+    if !ok {
+        return Err(ApiError::forbidden("не твой плейлист"));
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Debug, Deserialize)]
+struct PlaylistTrackBody {
+    track_id: i64,
+    position: Option<i64>,
+}
+
+async fn add_playlist_track(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<i64>,
+    Json(body): Json<PlaylistTrackBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    let ok = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let conn = db.open()?;
+        let me = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
+        crate::playlists::add_track(&conn, me, id, body.track_id, body.position)
+    })
+    .await??;
+    if !ok {
+        return Err(ApiError::forbidden("не твой плейлист или нет трека"));
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn remove_playlist_track(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+    Path((id, track_id)): Path<(i64, i64)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    let ok = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let conn = db.open()?;
+        let me = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
+        crate::playlists::remove_track(&conn, me, id, track_id)
+    })
+    .await??;
+    if !ok {
+        return Err(ApiError::forbidden("не твой плейлист"));
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn like_playlist(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    let ok = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let conn = db.open()?;
+        let me = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
+        crate::playlists::set_like(&conn, me, id, true)
+    })
+    .await??;
+    if !ok {
+        return Err(ApiError::not_found("playlist"));
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn unlike_playlist(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    let ok = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let conn = db.open()?;
+        let me = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
+        crate::playlists::set_like(&conn, me, id, false)
+    })
+    .await??;
+    if !ok {
+        return Err(ApiError::not_found("playlist"));
+    }
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn artist_html(

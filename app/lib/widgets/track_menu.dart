@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../design/components.dart';
 import '../design/tokens.dart';
+import '../screens/playlists.dart';
 import '../player/controller.dart';
 import '../player/likes.dart';
 
@@ -158,6 +159,14 @@ class _TrackSheetState extends State<_TrackSheet> {
               onTap: () {
                 widget.player.addToQueue(t);
                 Navigator.of(context).pop();
+              },
+            ),
+            _Item(
+              icon: Icons.playlist_add_rounded,
+              label: 'добавить в плейлист',
+              onTap: () {
+                Navigator.of(context).pop();
+                showAddToPlaylist(context, api: widget.api, track: t);
               },
             ),
             _Item(

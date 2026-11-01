@@ -37,6 +37,36 @@ impl Db {
         let _ = conn.execute("ALTER TABLE track ADD COLUMN energy REAL", []);
         let _ = conn.execute("ALTER TABLE track ADD COLUMN mode REAL", []);
 
+        // Playlists grew from "a name and a list" into something with a
+        // visibility, a description and a revision.
+        let _ = conn.execute(
+            "ALTER TABLE playlist ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE playlist ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE playlist ADD COLUMN kind TEXT NOT NULL DEFAULT 'manual'",
+            [],
+        );
+        let _ = conn.execute("ALTER TABLE playlist ADD COLUMN cover_path TEXT", []);
+        let _ = conn.execute(
+            "ALTER TABLE playlist ADD COLUMN rev INTEGER NOT NULL DEFAULT 1",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE playlist_track ADD COLUMN added_at INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        // The index has to come after the column exists: an old database gets
+        // the column from the ALTER above, a new one from the table itself.
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS playlist_public ON playlist(is_public)",
+            [],
+        );
+
         // Older databases described a user by a telegram login. The account is
         // now a phrase, so the column goes away; ids are preserved because every
         // like and play event points at them.
@@ -49,7 +79,11 @@ impl Db {
             .unwrap_or(false);
         if has_legacy {
             conn.execute_batch(
-                "PRAGMA foreign_keys=OFF;
+                // Renaming a table would rewrite every foreign key that points
+                // at it; legacy_alter_table keeps the old text so the likes and
+                // events of the old user still point at `user`.
+                "PRAGMA legacy_alter_table=ON;
+                 PRAGMA foreign_keys=OFF;
                  BEGIN;
                  ALTER TABLE user RENAME TO user_legacy;
                  CREATE TABLE user (
@@ -62,6 +96,7 @@ impl Db {
                    SELECT id, name, NULL, created_at FROM user_legacy;
                  DROP TABLE user_legacy;
                  COMMIT;
+                 PRAGMA legacy_alter_table=OFF;
                  PRAGMA foreign_keys=ON;",
             )?;
         }
@@ -189,11 +224,18 @@ CREATE TABLE IF NOT EXISTS artist_like (
 );
 
 CREATE TABLE IF NOT EXISTS playlist (
-  id         INTEGER PRIMARY KEY,
-  user_id    INTEGER NOT NULL REFERENCES user(id),
-  name       TEXT NOT NULL,
-  norm       TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
+  id          INTEGER PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES user(id),
+  name        TEXT NOT NULL,
+  norm        TEXT NOT NULL,
+  kind        TEXT NOT NULL DEFAULT 'manual',
+  description TEXT NOT NULL DEFAULT '',
+  cover_path  TEXT,
+  -- Public playlists are what another device in the same account sees; a
+  -- local one exists only for its owner.
+  is_public   INTEGER NOT NULL DEFAULT 0,
+  created_at  INTEGER NOT NULL,
+  rev         INTEGER NOT NULL DEFAULT 1,
   UNIQUE (user_id, norm)
 );
 
@@ -201,7 +243,15 @@ CREATE TABLE IF NOT EXISTS playlist_track (
   playlist_id INTEGER NOT NULL REFERENCES playlist(id) ON DELETE CASCADE,
   track_id    INTEGER NOT NULL REFERENCES track(id),
   position    INTEGER NOT NULL,
+  added_at    INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (playlist_id, track_id)
+);
+
+CREATE TABLE IF NOT EXISTS playlist_like (
+  user_id     INTEGER NOT NULL REFERENCES user(id),
+  playlist_id INTEGER NOT NULL REFERENCES playlist(id) ON DELETE CASCADE,
+  ts          INTEGER NOT NULL,
+  PRIMARY KEY (user_id, playlist_id)
 );
 
 CREATE TABLE IF NOT EXISTS play_event (
