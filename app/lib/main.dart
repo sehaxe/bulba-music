@@ -70,6 +70,7 @@ class _BulbaAppState extends State<BulbaApp> {
   Future<void> _boot() async {
     final prefs = await Prefs.load();
     themeMode.value = Prefs.modeFrom(prefs.themeMode);
+    api.token = prefs.token;
     player.setVolume(prefs.volume);
     final skipOnboarding =
         const bool.fromEnvironment('SHOT_ONBOARD') ||

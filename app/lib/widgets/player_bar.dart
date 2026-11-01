@@ -222,6 +222,25 @@ class _VolumeState extends State<_Volume> {
   bool _hover = false;
 
   @override
+  void initState() {
+    super.initState();
+    // The bar no longer rebuilds on every player notification (that was the
+    // frame-rate fix), so the slider has to watch the volume itself — otherwise
+    // the thumb only jumps into place after the drag ends.
+    widget.player.addListener(_rebuild);
+  }
+
+  @override
+  void dispose() {
+    widget.player.removeListener(_rebuild);
+    super.dispose();
+  }
+
+  void _rebuild() {
+    if (mounted) setState(() {});
+  }
+
+  @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
     final v = widget.player.volume;
@@ -257,7 +276,10 @@ class _VolumeState extends State<_Volume> {
                 thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
                 trackShape: const RoundedRectSliderTrackShape(),
               ),
-              child: Slider(value: v, onChanged: widget.player.setVolume),
+              child: Slider(
+                value: v.clamp(0.0, 1.0),
+                onChanged: (next) => widget.player.setVolume(next),
+              ),
             ),
           ),
         ],

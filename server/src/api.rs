@@ -54,6 +54,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/login", post(login))
         .route("/api/auth/me", get(whoami))
         .route("/api/library/normalize", post(normalize_names))
+        .route("/api/library/tree", post(library_tree))
         .with_state(state)
 }
 
@@ -478,6 +479,40 @@ async fn remove_artist_like(
     })
     .await??;
     Ok(Json(json!({"liked": false})))
+}
+
+#[derive(Debug, Deserialize)]
+struct TreeQuery {
+    #[serde(default)]
+    apply: bool,
+    limit: Option<usize>,
+}
+
+/// Reorganises the whole library into Artist/Album (Year)/NN - Title.ext.
+async fn library_tree(
+    State(st): State<AppState>,
+    Query(q): Query<TreeQuery>,
+) -> Result<Json<crate::normalize::TreeReport>, ApiError> {
+    let db = st.db.clone();
+    let root = st
+        .libraries
+        .first()
+        .cloned()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("bulba");
+    let limit = q.limit.unwrap_or(usize::MAX);
+    let report = tokio::task::spawn_blocking(
+        move || -> anyhow::Result<crate::normalize::TreeReport> {
+            let conn = db.open()?;
+            if q.apply {
+                crate::normalize::tree_apply(&conn, &root, limit)
+            } else {
+                crate::normalize::tree_plan(&conn, &root)
+            }
+        },
+    )
+    .await??;
+    Ok(Json(report))
 }
 
 #[derive(Debug, Deserialize)]

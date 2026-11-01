@@ -29,6 +29,8 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  String? _token;
+  String _who = 'локальный';
   Map<String, dynamic>? _info;
   bool _scanning = false;
   bool _embedding = false;
@@ -39,7 +41,140 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    _token = widget.prefs.token;
     _load();
+  }
+
+  Future<void> _register() async {
+    try {
+      final session = await widget.api.register('слушатель');
+      final phrase = session['phrase'] as String? ?? '';
+      _token = session['token'] as String?;
+      widget.api.token = _token;
+      await widget.prefs.setToken(_token);
+      if (!mounted) return;
+      setState(() => _who = (session['name'] ?? '') as String);
+      await _showPhrase(phrase);
+    } catch (e) {
+      if (mounted) setState(() => _embedNote = 'ошибка: $e');
+    }
+  }
+
+  Future<void> _showPhrase(String phrase) async {
+    final words = phrase.split(' ');
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        final p = Palette.of(context);
+        return Dialog(
+          backgroundColor: p.roomElevated,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: Padding(
+              padding: const EdgeInsets.all(S.xl),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('твоя фраза', style: T.heading(p.ink)),
+                  const SizedBox(height: S.sm),
+                  Text(
+                    'Двенадцать слов — это и логин, и пароль. Покажи их один раз '
+                    'себе: введёшь их на телефоне, и он подхватит библиотеку и вкус.',
+                    style: T.caption(p.mute),
+                  ),
+                  const SizedBox(height: S.lg),
+                  Wrap(
+                    spacing: S.sm,
+                    runSpacing: S.sm,
+                    children: [
+                      for (var i = 0; i < words.length; i++)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: p.card,
+                            border: Border.all(color: p.hairline),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            '${i + 1}. ${words[i]}',
+                            style: T.body(p.ink),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: S.lg),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: PillButton(
+                      icon: Icons.check_rounded,
+                      label: 'записал',
+                      onTap: () => Navigator.of(context).pop(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _login() async {
+    final controller = TextEditingController();
+    final phrase = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        final p = Palette.of(context);
+        return AlertDialog(
+          backgroundColor: p.roomElevated,
+          title: Text('вход по фразе', style: T.heading(p.ink)),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLines: 3,
+            cursorColor: C.signal,
+            style: T.body(p.ink),
+            decoration: InputDecoration(
+              hintText: 'двенадцать слов через пробел',
+              hintStyle: T.body(p.ash),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text('отмена', style: T.label(p.mute)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(controller.text),
+              child: Text('войти', style: T.label(C.signal)),
+            ),
+          ],
+        );
+      },
+    );
+    if (phrase == null || phrase.trim().isEmpty) return;
+    try {
+      final session = await widget.api.login(phrase.trim());
+      _token = session['token'] as String?;
+      widget.api.token = _token;
+      await widget.prefs.setToken(_token);
+      if (!mounted) return;
+      setState(() => _who = (session['name'] ?? '') as String);
+      await _load();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _embedNote = 'войти не вышло: $e');
+      }
+    }
   }
 
   Future<void> _load() async {
@@ -314,6 +449,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _KeyRow(keys: 'q', what: 'очередь'),
             _KeyRow(keys: 'f', what: 'полный плеер'),
             _KeyRow(keys: '/', what: 'поиск'),
+          ],
+        ),
+
+        _Section(
+          title: 'синхронизация',
+          children: [
+            Text(
+              'Одна фраза на все устройства: зарегистрируйся на компьютере, '
+              'введи те же двенадцать слов на телефоне — и это один и тот же '
+              'слушатель с историей, лайками и подборками.',
+              style: T.caption(p.mute),
+            ),
+            const SizedBox(height: S.md),
+            _Row(
+              label: 'устройство',
+              value: _token == null ? 'локальное, без аккаунта' : 'привязано',
+            ),
+            const SizedBox(height: S.sm),
+            Row(
+              children: [
+                PillButton(
+                  icon: Icons.key_rounded,
+                  label: 'создать фразу',
+                  onTap: _register,
+                ),
+                const SizedBox(width: S.md),
+                PillButton(
+                  icon: Icons.login_rounded,
+                  label: 'ввести фразу',
+                  onTap: _login,
+                ),
+              ],
+            ),
           ],
         ),
 

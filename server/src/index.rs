@@ -173,6 +173,34 @@ pub fn artist(conn: &Connection, id: i64) -> Result<Option<ArtistPage>> {
         .filter_map(|r| r.ok())
         .collect();
 
+    // Nobody has played anything yet on a fresh library; showing an empty
+    // "most played" block would look broken, so the last three added tracks
+    // stand in until real history exists.
+    let top_tracks = if top_tracks.is_empty() {
+        let mut stmt = conn.prepare(
+            "SELECT t.id, t.title, a.id, a.title,
+                    CASE WHEN a.cover_path IS NULL THEN 0 ELSE 1 END,
+                    0, t.duration_ms
+             FROM track t JOIN album a ON a.id = t.album_id
+             WHERE a.artist_id = ?1
+             ORDER BY t.created_at DESC, t.id DESC LIMIT 3",
+        )?;
+        let rows = stmt.query_map([id], |r| {
+            Ok(TopTrack {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                album_id: r.get(2)?,
+                album: r.get(3)?,
+                has_cover: r.get(4)?,
+                plays: r.get(5)?,
+                duration_ms: r.get(6)?,
+            })
+        })?;
+        rows.filter_map(|r| r.ok()).collect()
+    } else {
+        top_tracks
+    };
+
     let (first_year, last_year): (Option<i64>, Option<i64>) = conn
         .query_row(
             "SELECT min(year), max(year) FROM album WHERE artist_id=?1 AND year IS NOT NULL",

@@ -408,3 +408,221 @@ mod tests {
         assert!(album_dir.join("01 - Same.flac").exists());
     }
 }
+
+/// Folder-level organisation: one canonical tree instead of whatever the
+/// downloader left behind.
+///
+///   <root>/Artist/Album (Year)/[CDn/]NN - Title.ext
+///
+/// Files that would land on a name already taken are not merged and not
+/// deleted: duplicates go to `<root>/_duplicates` and collisions are reported,
+/// because a library is the one thing a tool must never silently eat.
+#[derive(Debug, Serialize, Default)]
+pub struct TreeReport {
+    pub total: i64,
+    pub planned: Vec<Rename>,
+    pub duplicates: Vec<Rename>,
+    pub conflicts: Vec<Conflict>,
+    pub skipped: i64,
+    pub applied: usize,
+    pub errors: Vec<String>,
+}
+
+fn clean_component(s: &str, fallback: &str) -> String {
+    let v = sanitize(s);
+    if v.trim().is_empty() || v.eq_ignore_ascii_case("unknown") {
+        fallback.to_string()
+    } else {
+        v
+    }
+}
+
+pub fn tree_plan(conn: &Connection, root: &Path) -> Result<TreeReport> {
+    let mut report = TreeReport::default();
+    let mut stmt = conn.prepare(
+        "SELECT t.id, m.path, ar.name, al.title, al.year, t.disc, t.track_no, t.title
+         FROM track t
+         JOIN track_master tm ON tm.track_id = t.id
+         JOIN master m ON m.id = tm.master_id
+         JOIN album al ON al.id = t.album_id
+         JOIN artist ar ON ar.id = al.artist_id
+         ORDER BY m.path",
+    )?;
+
+    struct Row {
+        _id: i64,
+        path: String,
+        artist: String,
+        album: String,
+        year: Option<i64>,
+        disc: Option<i64>,
+        track_no: Option<i64>,
+        title: String,
+    }
+    let rows: Vec<Row> = stmt
+        .query_map([], |r| {
+            Ok(Row {
+                _id: r.get(0)?,
+                path: r.get(1)?,
+                artist: r.get(2)?,
+                album: r.get(3)?,
+                year: r.get(4)?,
+                disc: r.get(5)?,
+                track_no: r.get(6)?,
+                title: r.get(7)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    report.total = rows.len() as i64;
+
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut seen_identity: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+    for row in &rows {
+        let src = PathBuf::from(&row.path);
+        if !src.exists() {
+            report.skipped += 1;
+            continue;
+        }
+        let ext = match src.extension() {
+            Some(e) => e.to_string_lossy().to_string(),
+            None => {
+                report.skipped += 1;
+                continue;
+            }
+        };
+
+        let artist_dir = clean_component(&row.artist, "_unknown artist");
+        let album_dir = match row.year {
+            Some(y) => format!("{} ({y})", clean_component(&row.album, "Unknown Album")),
+            None => clean_component(&row.album, "Unknown Album"),
+        };
+        let mut dir = root.join(&artist_dir).join(&album_dir);
+        if let Some(d) = row.disc {
+            if d > 1 {
+                dir = dir.join(format!("CD{d}"));
+            }
+        }
+        let name = match row.track_no {
+            Some(n) if n > 0 => format!("{n:02} - {}.{}", sanitize(&row.title), ext),
+            _ => format!("{}.{}", sanitize(&row.title), ext),
+        };
+        let mut dst = dir.join(&name);
+
+        // Same record already present under a different file name.
+        let identity = format!(
+            "{}|{}|{}|{}|{}",
+            row.artist.to_lowercase(),
+            row.album.to_lowercase(),
+            row.disc.unwrap_or(1),
+            row.track_no.unwrap_or(0),
+            row.title.to_lowercase()
+        );
+        if seen_identity.contains_key(&identity) {
+            // Keep the file exactly as it arrived, only out of the way: the
+            // duplicate folder is for deciding later, not for renaming twice.
+            let original = src
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| name.clone());
+            let mut dup = root.join("_duplicates").join(&artist_dir).join(&original);
+            let mut n = 2;
+            while dup.exists() {
+                let stems = original.rsplit_once('.').map(|(a, b)| (a.to_string(), b.to_string()));
+                dup = match stems {
+                    Some((stem, ext)) => root
+                        .join("_duplicates")
+                        .join(&artist_dir)
+                        .join(format!("{stem} ({n}).{ext}")),
+                    None => root
+                        .join("_duplicates")
+                        .join(&artist_dir)
+                        .join(format!("{original} ({n})")),
+                };
+                n += 1;
+            }
+            report.duplicates.push(Rename {
+                from: row.path.clone(),
+                to: dup.to_string_lossy().to_string(),
+                track_id: Some(row._id),
+            });
+            continue;
+        }
+        seen_identity.insert(identity, row.path.clone());
+
+        let dst_str = dst.to_string_lossy().to_string();
+        if dst == src {
+            taken.insert(dst_str);
+            continue;
+        }
+        if dst.exists() || taken.contains(&dst_str) {
+            report.conflicts.push(Conflict {
+                path: row.path.clone(),
+                reason: format!("уже занято: {}", dst_str),
+            });
+            continue;
+        }
+        taken.insert(dst_str.clone());
+        report.planned.push(Rename {
+            from: row.path.clone(),
+            to: dst_str,
+            track_id: Some(row._id),
+        });
+    }
+
+    Ok(report)
+}
+
+pub fn tree_apply(conn: &Connection, root: &Path, limit: usize) -> Result<TreeReport> {
+    let mut report = tree_plan(conn, root)?;
+    let mut undo: Vec<Rename> = Vec::new();
+
+    for rename in report.planned.iter().take(limit) {
+        let from = PathBuf::from(&rename.from);
+        let to = PathBuf::from(&rename.to);
+        if let Some(parent) = to.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                report.errors.push(format!("{}: {e}", rename.from));
+                continue;
+            }
+        }
+        match std::fs::rename(&from, &to) {
+            Ok(()) => {
+                conn.execute(
+                    "UPDATE master SET path=?1 WHERE path=?2",
+                    rusqlite::params![rename.to, rename.from],
+                )?;
+                // Keep the cover with the album folder it now belongs to.
+                undo.push(rename.clone());
+                report.applied += 1;
+            }
+            Err(e) => report.errors.push(format!("{}: {e}", rename.from)),
+        }
+    }
+
+    for rename in report.duplicates.iter().take(limit) {
+        let from = PathBuf::from(&rename.from);
+        let to = PathBuf::from(&rename.to);
+        if let Some(parent) = to.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if std::fs::rename(&from, &to).is_ok() {
+            conn.execute(
+                "UPDATE master SET path=?1 WHERE path=?2",
+                rusqlite::params![rename.to, rename.from],
+            )?;
+        }
+    }
+
+    if !undo.is_empty() {
+        let path = std::env::var("BULBA_DB")
+            .ok()
+            .map(|p| PathBuf::from(p).with_extension("tree.json"))
+            .unwrap_or_else(|| PathBuf::from("/tmp/bulba-tree.json"));
+        if let Ok(json) = serde_json::to_string_pretty(&undo) {
+            let _ = std::fs::write(path, json);
+        }
+    }
+    Ok(report)
+}

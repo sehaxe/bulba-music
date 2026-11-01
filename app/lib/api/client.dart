@@ -491,10 +491,65 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
+/// Adds the session token to every request in one place, so no call site can
+/// forget it and quietly fall back to the local user.
+class _AuthClient extends http.BaseClient {
+  _AuthClient(this._inner, this._token);
+  final http.Client _inner;
+  final String? Function() _token;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
+    final token = _token();
+    if (token != null && token.isNotEmpty) {
+      request.headers['Authorization'] = 'Bearer $token';
+    }
+    return _inner.send(request);
+  }
+}
+
 class Api {
-  Api(this.base);
+  Api(this.base) {
+    _http = _AuthClient(http.Client(), () => token);
+  }
   String base;
-  final http.Client _http = http.Client();
+  late final http.Client _http;
+
+  /// Session token from the seed phrase, if this device is signed in.
+  String? token;
+
+  Future<Map<String, dynamic>> register(String name) async {
+    final r = await _http
+        .post(
+          Uri.parse('$base/api/auth/register'),
+          headers: {'content-type': 'application/json'},
+          body: jsonEncode({'name': name}),
+        )
+        .timeout(const Duration(seconds: 20));
+    if (r.statusCode != 200) throw ApiException('register → ${r.statusCode}');
+    return jsonDecode(r.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> login(String phrase) async {
+    final r = await _http
+        .post(
+          Uri.parse('$base/api/auth/login'),
+          headers: {'content-type': 'application/json'},
+          body: jsonEncode({'phrase': phrase}),
+        )
+        .timeout(const Duration(seconds: 20));
+    if (r.statusCode == 401) throw ApiException('фраза не подходит');
+    if (r.statusCode != 200) throw ApiException('login → ${r.statusCode}');
+    return jsonDecode(r.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>?> me() async {
+    final r = await _http
+        .get(Uri.parse('$base/api/auth/me'))
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) return null;
+    return jsonDecode(r.body) as Map<String, dynamic>;
+  }
 
   Future<List<Track>> tracks({int limit = 2000, int offset = 0}) async {
     final r = await _http

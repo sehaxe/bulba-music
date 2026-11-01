@@ -31,6 +31,7 @@ class TrackWaveform extends StatefulWidget {
 
 class _TrackWaveformState extends State<TrackWaveform>
     with SingleTickerProviderStateMixin {
+  final GlobalKey _barKey = GlobalKey();
   List<int>? _peaks;
   late final AnimationController _reveal = AnimationController(
     vsync: this,
@@ -89,19 +90,22 @@ class _TrackWaveformState extends State<TrackWaveform>
       playing: widget.player.playing,
       builder: (context) => LayoutBuilder(
         builder: (context, box) {
-          // Measure against the real render box and convert the pointer, so a
-          // tap lands where the finger is no matter how the row is padded.
-          void seek(Offset global) {
-            final object = context.findRenderObject();
+          // Take the pointer position the gesture hands us (already local to
+          // this detector) and measure the very same box by key. Converting a
+          // global point through findRenderObject() picked an ancestor, which
+          // is why the seek landed far from the cursor.
+          void seek(Offset local) {
+            final object = _barKey.currentContext?.findRenderObject();
             if (object is! RenderBox || object.size.width <= 0) return;
-            final local = object.globalToLocal(global);
-            widget.player.seek((local.dx / object.size.width).clamp(0.0, 1.0));
+            final ratio = (local.dx / object.size.width).clamp(0.0, 1.0);
+            widget.player.seek(ratio);
           }
 
           return GestureDetector(
+            key: _barKey,
             behavior: HitTestBehavior.opaque,
-            onTapDown: (d) => seek(d.globalPosition),
-            onHorizontalDragUpdate: (d) => seek(d.globalPosition),
+            onTapDown: (d) => seek(d.localPosition),
+            onHorizontalDragUpdate: (d) => seek(d.localPosition),
             child: AnimatedBuilder(
               animation: _reveal,
               builder: (context, _) => ClipRect(

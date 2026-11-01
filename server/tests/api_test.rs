@@ -154,7 +154,22 @@ async fn search_finds_track_and_ignores_fts_operators() {
     let tracks = json["tracks"].as_array().unwrap();
     assert_eq!(tracks.len(), 1);
     assert_eq!(tracks[0]["title"], "Xtal");
+    // A track match must not invent an artist section for a query that does not
+    // match the artist's name.
+    assert!(json["artists"].as_array().unwrap().is_empty());
+
+    let by_artist = router(fixture().state)
+        .oneshot(
+            Request::get("/api/search?q=aphex")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(&body_bytes(by_artist).await).unwrap();
     assert_eq!(json["artists"].as_array().unwrap().len(), 1);
+    assert_eq!(json["tracks"].as_array().unwrap().len(), 1);
 
     let admin = fixture();
     let resp = router(admin.state)

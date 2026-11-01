@@ -23,6 +23,15 @@ class Prefs {
   int get crossfade => _sp.getInt('crossfade_seconds') ?? 0;
   Future<void> setCrossfade(int v) => _sp.setInt('crossfade_seconds', v);
 
+  String? get token => _sp.getString('auth_token');
+  Future<void> setToken(String? token) async {
+    if (token == null) {
+      await _sp.remove('auth_token');
+    } else {
+      await _sp.setString('auth_token', token);
+    }
+  }
+
   String? get lastTab => _sp.getString('last_tab');
   Future<void> setLastTab(String v) => _sp.setString('last_tab', v);
 

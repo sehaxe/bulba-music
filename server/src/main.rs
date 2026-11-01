@@ -39,7 +39,12 @@ async fn main() -> Result<()> {
         let env = std::env::var("BULBA_LIBRARY").unwrap_or(format!("{home}/Music"));
         libraries = env.split(':').map(PathBuf::from).collect();
     }
-    let mut ignores: Vec<String> = vec!["Telegram Desktop".into(), "ChatExport_".into()];
+    let mut ignores: Vec<String> = vec![
+        "Telegram Desktop".into(),
+        "ChatExport_".into(),
+        // The organiser parks duplicates here; they must not be indexed twice.
+        "/_duplicates/".into(),
+    ];
     let mut j = 0;
     while j < args.len() {
         if args[j] == "--ignore" {
