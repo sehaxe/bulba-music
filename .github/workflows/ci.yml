@@ -25,6 +25,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: server
+      # ffmpeg is a runtime dependency (covers, Opus renders, waveforms, EBU
+      # R128), and the loudness tests exercise it for real instead of mocking it.
+      - name: ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
       - name: cargo test
         working-directory: server
         run: cargo test --all-targets

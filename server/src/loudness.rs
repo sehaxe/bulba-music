@@ -43,8 +43,22 @@ pub fn lufs(path: &str) -> Result<Option<f64>> {
 mod tests {
     use super::*;
 
+    /// ffmpeg is a runtime dependency, but a developer without it should get a
+    /// skipped test rather than a red suite that says nothing about the code.
+    fn have_ffmpeg() -> bool {
+        Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
     #[test]
     fn a_silent_file_has_no_integrated_loudness() {
+        if !have_ffmpeg() {
+            eprintln!("skipped: no ffmpeg on PATH");
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("silence.wav");
         let status = Command::new("ffmpeg")
@@ -70,6 +84,10 @@ mod tests {
 
     #[test]
     fn twenty_db_quieter_reads_twenty_lu_lower() {
+        if !have_ffmpeg() {
+            eprintln!("skipped: no ffmpeg on PATH");
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let tone = |gain: &str, name: &str| -> f64 {
             let path = dir.path().join(name);
