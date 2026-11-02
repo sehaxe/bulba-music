@@ -72,6 +72,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/stats", get(stats))
         .route("/api/playback", get(get_playback).post(put_playback))
         .route("/api/info", get(info))
+        .route("/api/config/serve", post(set_serve))
         .route("/api/auth/register", post(register))
         .route("/api/auth/login", post(login))
         .route("/api/auth/me", get(whoami))
@@ -1134,6 +1135,26 @@ async fn stats(
     Ok(Json(out))
 }
 
+#[derive(serde::Deserialize)]
+struct ServeBody {
+    quality: String,
+}
+
+async fn set_serve(
+    State(st): State<AppState>,
+    Json(body): Json<ServeBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = crate::serve::Serve::parse(&body.quality)
+        .ok_or_else(|| ApiError::bad_request("неизвестный формат"))?;
+    let db = st.db.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let conn = db.open()?;
+        crate::serve::set(&conn, serve)
+    })
+    .await??;
+    Ok(Json(json!({ "serve": serve.tag() })))
+}
+
 async fn info(
     State(st): State<AppState>,
     caller: Caller,
@@ -1151,6 +1172,7 @@ async fn info(
         let albums: i64 = conn.query_row("SELECT count(*) FROM album", [], |r| r.get(0))?;
         let artists: i64 = conn.query_row("SELECT count(*) FROM artist", [], |r| r.get(0))?;
         let bytes: i64 = conn.query_row("SELECT coalesce(sum(bytes),0) FROM master", [], |r| r.get(0))?;
+        let serve = crate::serve::get(&conn).tag().to_string();
         let embedded: i64 =
             conn.query_row("SELECT count(*) FROM embed WHERE model=?1", [crate::features::MODEL], |r| r.get(0))?;
         let lossless: i64 = conn.query_row(
@@ -1166,6 +1188,7 @@ async fn info(
             "bytes": bytes,
             "lossless": lossless,
             "embedded": embedded,
+            "serve": serve,
             "rev": rev,
         }))
     })
@@ -2164,8 +2187,9 @@ async fn stream(
     Query(q): Query<StreamQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    let db = st.db.clone();
     let found = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<(String, String)>> {
-        let conn = st.db.open()?;
+        let conn = db.open()?;
         Ok(conn
             .query_row(
                 "SELECT m.path, m.codec
@@ -2181,8 +2205,21 @@ async fn stream(
     .await??;
     let (path, codec) = found.ok_or_else(|| ApiError::not_found("track"))?;
 
+    // The policy caps the request: a box that only agrees to Opus never sends
+    // the master, however the client asks.
+    let policy = {
+        let db = st.db.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<crate::serve::Serve> {
+            let conn = db.open()?;
+            Ok(crate::serve::get(&conn))
+        })
+        .await??
+    };
+    let requested = q.quality.as_deref().and_then(crate::derive::Quality::parse);
+    let effective = policy.cap(requested);
+
     // A phone on a metered connection asks for Opus; the master never changes.
-    let (path, codec) = match q.quality.as_deref().and_then(crate::derive::Quality::parse) {
+    let (path, codec) = match effective {
         Some(quality) => {
             let cache = st.cache.clone();
             let source = std::path::PathBuf::from(&path);

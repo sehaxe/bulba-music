@@ -683,6 +683,20 @@ class Api {
         .toList(growable: false);
   }
 
+  /// What the server is willing to hand out. The cap is applied server-side, so
+  /// this only changes the policy — a phone still cannot pull FLAC past it.
+  Future<String> setServe(String quality) async {
+    final r = await _http
+        .post(
+          Uri.parse('$base/api/config/serve'),
+          headers: {'content-type': 'application/json'},
+          body: jsonEncode({'quality': quality}),
+        )
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) throw ApiException('serve → ${r.statusCode}');
+    return (jsonDecode(r.body) as Map<String, dynamic>)['serve'] as String;
+  }
+
   Future<Map<String, dynamic>> scan() async {
     final r = await _http
         .post(Uri.parse('$base/api/scan'))

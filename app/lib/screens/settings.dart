@@ -69,7 +69,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _load() async {
     try {
       final info = await widget.api.info();
-      if (mounted) setState(() => _info = info);
+      if (mounted) {
+        setState(() {
+          _info = info;
+          final stats = info['stats'] as Map<String, dynamic>? ?? {};
+          _serve = (stats['serve'] as String?) ?? 'flac';
+        });
+      }
     } catch (_) {}
   }
 
@@ -435,7 +441,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
             style: T.micro(p.ash),
           ),
           const SizedBox(height: S.lg),
-          Text('поток', style: T.caption(p.mute)),
+          Text('сервер отдаёт максимум', style: T.caption(p.mute)),
+          const SizedBox(height: S.sm),
+          Wrap(
+            spacing: S.sm,
+            runSpacing: S.sm,
+            children: [
+              for (final entry in const [
+                ('flac', 'flac'),
+                ('opus160', 'opus 160'),
+                ('opus128', 'opus 128'),
+                ('opus96', 'opus 96'),
+              ])
+                _Choice(
+                  label: entry.$2,
+                  selected: _serve == entry.$1,
+                  onTap: () async {
+                    final v = await widget.api.setServe(entry.$1);
+                    if (mounted) setState(() => _serve = v);
+                  },
+                ),
+            ],
+          ),
+          const SizedBox(height: S.sm),
+          Text(
+            'Это политика сервера, а не просьба клиента: если тут opus 128, то '
+            'никакое устройство не получит flac, даже если попросит. На «flac» '
+            'каждое устройство решает само (см. ниже).',
+            style: T.micro(p.ash),
+          ),
+          const SizedBox(height: S.lg),
+          Text('поток на этом устройстве', style: T.caption(p.mute)),
           const SizedBox(height: S.sm),
           Wrap(
             spacing: S.sm,
@@ -459,6 +495,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ],
           ),
           const SizedBox(height: S.sm),
+          if (_serve != 'flac' && widget.prefs.quality == 'flac')
+            Padding(
+              padding: const EdgeInsets.only(bottom: S.xs),
+              child: Text(
+                'Но сейчас сервер ограничивает всё до $_serve — flac не придёт, '
+                'пока ограничение не снято выше.',
+                style: T.micro(AccentScope.of(context)),
+              ),
+            ),
           Text(
             'Opus готовится сервером один раз и кэшируется: 128k — это ~3 МБ на '
             'трек вместо 28 МБ FLAC, на телефонной сети разница в десять раз. '
@@ -643,6 +688,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   int? duplicateCount;
+  String _serve = 'flac';
 
   Future<void> _openDuplicates() async {
     try {
