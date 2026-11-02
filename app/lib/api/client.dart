@@ -22,6 +22,7 @@ class Track {
     this.bits,
     this.rev = 0,
     this.loudness,
+    this.camelot,
   });
 
   final int id;
@@ -45,6 +46,11 @@ class Track {
   /// never built; level matching simply skips those.
   final double? loudness;
 
+  /// Camelot code ("8A"), from the key detected at import. Used to choose how
+  /// long a blend may be: same code blends for the whole length, a neighbour for
+  /// two thirds, a clash for a short one.
+  final String? camelot;
+
   factory Track.fromJson(Map<String, dynamic> j) => Track(
     id: j['id'] as int,
     title: (j['title'] ?? 'untitled') as String,
@@ -63,6 +69,7 @@ class Track {
     bits: j['bits'] as int?,
     rev: (j['rev'] ?? 0) as int,
     loudness: (j['loudness'] as num?)?.toDouble(),
+    camelot: j['camelot'] as String?,
   );
 
   Duration get duration => Duration(milliseconds: durationMs ?? 0);

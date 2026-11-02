@@ -314,6 +314,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS track_fts USING fts5(
   tokenize='unicode61 remove_diacritics 2'
 );
 
+CREATE TABLE IF NOT EXISTS track_key (
+  track_id INTEGER PRIMARY KEY REFERENCES track(id),
+  key      INTEGER NOT NULL,
+  mode     INTEGER NOT NULL,
+  conf     REAL NOT NULL,
+  camelot  TEXT NOT NULL
+);
+
 DROP VIEW IF EXISTS v_track;
 CREATE VIEW v_track AS
 SELECT
@@ -339,10 +347,15 @@ SELECT
   (SELECT count(*) FROM track_master tm WHERE tm.track_id = t.id) AS master_count,
   t.created_at,
   t.rev,
-  t.loudness_db
+  t.loudness_db,
+  tk.camelot,
+  tk.key,
+  tk.mode,
+  tk.conf
 FROM track t
 JOIN album  al ON al.id = t.album_id
-JOIN artist ar ON ar.id = al.artist_id;
+JOIN artist ar ON ar.id = al.artist_id
+LEFT JOIN track_key tk ON tk.track_id = t.id;
 "#;
 
 pub fn rev(conn: &Connection) -> Result<i64> {

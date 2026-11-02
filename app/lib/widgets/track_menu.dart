@@ -280,6 +280,13 @@ void _showDetails(BuildContext context, Track t, Api api) {
               if (t.trackNo != null)
                 _DetailRow(label: 'трек', value: '${t.trackNo}', p: p),
               _DetailRow(label: 'длительность', value: mmss(t.duration), p: p),
+              if (t.camelot != null)
+                _DetailRow(
+                  label: 'тональность',
+                  value:
+                      '${t.camelot} · ${t.camelot!.endsWith('A') ? 'минор' : 'мажор'}',
+                  p: p,
+                ),
               if (tagsOf(t).isNotEmpty)
                 _DetailRow(
                   label: 'теги',

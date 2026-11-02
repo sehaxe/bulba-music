@@ -169,11 +169,17 @@ pub struct Track {
     /// EBU R128 integrated loudness, filled when features are built. The client
     /// evens out track-to-track level with it.
     pub loudness: Option<f64>,
+    /// Camelot code, e.g. "8A". Two tracks that blend are the same code or a
+    /// neighbour; the client picks the blend length from this.
+    pub camelot: Option<String>,
+    pub key: Option<i64>,
+    pub mode: Option<i64>,
+    pub conf: Option<f64>,
 }
 
 pub const TRACK_COLUMNS: &str = "id, title, artist, album, album_id, has_cover, year, disc,
     track_no, duration_ms, codec, bitrate, sample_rate, bits, channels, bytes, master_count,
-    created_at, rev, loudness_db";
+    created_at, rev, loudness_db, camelot, key, mode, conf";
 
 pub fn map_track(r: &rusqlite::Row) -> rusqlite::Result<Track> {
     Ok(Track {
@@ -197,6 +203,10 @@ pub fn map_track(r: &rusqlite::Row) -> rusqlite::Result<Track> {
         created_at: r.get(17)?,
         rev: r.get(18)?,
         loudness: r.get(19).ok(),
+        camelot: r.get(20).ok(),
+        key: r.get(21).ok(),
+        mode: r.get(22).ok(),
+        conf: r.get(23).ok(),
     })
 }
 

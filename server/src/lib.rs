@@ -7,6 +7,7 @@ pub mod dupes;
 pub mod derive;
 pub mod features;
 pub mod index;
+pub mod keys;
 pub mod range;
 pub mod normalize;
 pub mod pages;

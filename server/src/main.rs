@@ -72,6 +72,17 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let db = Db::new(db_path);
     db.init()?;
+    {
+        // Keys are derived from chroma that was already computed, so this is a
+        // pure database pass: a few milliseconds for the whole library, and no
+        // file is touched.
+        let conn = db.open()?;
+        match bulba_music_server::keys::ensure(&conn) {
+            Ok(n) if n > 0 => tracing::info!("keys: {n} tracks"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("keys: {e}"),
+        }
+    }
 
     if args.iter().any(|a| a == "scan") {
         let mut total = scan::ScanReport::default();

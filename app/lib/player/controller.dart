@@ -465,12 +465,42 @@ class PlayerController extends ChangeNotifier {
   /// Fires once per track, when the remaining time reaches the crossfade
   /// length. Called from every position tick, so it has to be cheap and
   /// idempotent.
+  /// How long the blend into the next track may be.
+  ///
+  /// Harmonic mixing in one rule: the same Camelot code is a free blend, a
+  /// neighbour on the wheel is a fifth away and still consonant, anything else
+  /// gets a short blend so the two keys never sit on top of each other. When a
+  /// key is unknown the mix is merely modest instead of loud.
+  int get _blendSeconds {
+    final max = crossfade;
+    if (max <= 0) return 0;
+    final next = _queue.isEmpty ? null : _queue[(_index + 1) % _queue.length];
+    final a = current?.camelot;
+    final b = next?.camelot;
+    if (a == null || b == null) return (max * 2 / 3).round().clamp(4, max);
+    if (a == b) return max;
+    final an = int.tryParse(a.substring(0, a.length - 1));
+    final bn = int.tryParse(b.substring(0, b.length - 1));
+    final al = a.substring(a.length - 1);
+    final bl = b.substring(b.length - 1);
+    if (an != null && bn != null) {
+      if (an == bn && al != bl) return (max * 2 / 3).round().clamp(4, max);
+      final d = (an - bn).abs();
+      if (al == bl && (d == 1 || d == 11)) {
+        return (max * 2 / 3).round().clamp(4, max);
+      }
+    }
+    return (max / 3).round().clamp(2, max);
+  }
+
   void _maybeFade() {
     if (crossfade <= 0 || _fading || !_playing) return;
+    final blend = _blendSeconds;
+    if (blend <= 0) return;
     final total = _duration.inMilliseconds;
     if (total <= 0) return;
     final left = total - _position.inMilliseconds;
-    if (left > crossfade * 1000) return;
+    if (left > blend * 1000) return;
     if (left <= 0) return;
     if (_fadeStartedFor == current?.id) return;
     _fadeStartedFor = current?.id;
@@ -487,9 +517,12 @@ class PlayerController extends ChangeNotifier {
     final nextIndex = (_index + 1) % _queue.length;
     if (nextIndex == _index) return;
     final incoming = _queue[nextIndex];
+    final seconds = _blendSeconds;
     _fading = true;
 
-    debugPrint('[fade] start ${crossfade}s → ${incoming.title}');
+    debugPrint(
+      '[fade] start ${seconds}s (${current?.camelot ?? '?'} → ${incoming.camelot ?? '?'}) → ${incoming.title}',
+    );
     final outgoing = _active;
     final target = _idle;
     await target.setVolume(0);
@@ -497,7 +530,7 @@ class PlayerController extends ChangeNotifier {
       Media(api.stream(incoming.id, quality: quality).toString()),
     );
 
-    final total = Duration(seconds: crossfade);
+    final total = Duration(seconds: seconds);
     final started = DateTime.now();
     _fade?.cancel();
     _fade = Timer.periodic(const Duration(milliseconds: 50), (timer) async {
