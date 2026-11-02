@@ -968,14 +968,48 @@ class Api {
     return ((jsonDecode(r.body) as Map<String, dynamic>)['mixes'] ?? 0) as int;
   }
 
-  Future<List<Mix>> dailyMixes() async {
-    final r = await _http
-        .get(Uri.parse('$base/api/recs/daily'))
-        .timeout(const Duration(seconds: 30));
-    if (r.statusCode != 200) {
-      throw ApiException('recs/daily → ${r.statusCode}');
+  /// Reads a cached body when a request fails. The cache is written from the
+  /// same body that was just parsed, so a fallback is always a real answer the
+  /// server gave, never a guess.
+  Future<String?> _cached(String name) async {
+    final dir = cacheDir;
+    if (dir == null) return null;
+    final f = File('${dir.path}/$name.json');
+    if (!f.existsSync()) return null;
+    try {
+      return await f.readAsString();
+    } catch (_) {
+      return null;
     }
-    final list = jsonDecode(r.body) as List<dynamic>;
+  }
+
+  Future<void> _cache(String name, String body) async {
+    final dir = cacheDir;
+    if (dir == null) return;
+    try {
+      await File('${dir.path}/$name.json').writeAsString(body);
+    } catch (_) {}
+  }
+
+  Future<List<Mix>> dailyMixes() async {
+    try {
+      final r = await _http
+          .get(Uri.parse('$base/api/recs/daily'))
+          .timeout(const Duration(seconds: 30));
+      if (r.statusCode != 200) {
+        throw ApiException('recs/daily → ${r.statusCode}');
+      }
+      await _cache('daily', r.body);
+      return _parseMixes(r.body);
+    } catch (_) {
+      final cached = await _cached('daily');
+      if (cached == null) rethrow;
+      return _parseMixes(cached);
+    }
+  }
+
+  static List<Mix> _parseMixes(String body) {
+    final list = jsonDecode(body) as List<dynamic>;
     return list
         .map((e) => Mix.fromJson(e as Map<String, dynamic>))
         .toList(growable: false);
@@ -1187,9 +1221,18 @@ extension WaveApi on Api {
     };
     final uri = Uri.parse('$base/api/recs/wave')
         .replace(queryParameters: params);
-    final r = await _http.get(uri).timeout(const Duration(seconds: 20));
-    if (r.statusCode != 200) throw ApiException('wave → ${r.statusCode}');
-    return WaveReply.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+    try {
+      final r = await _http.get(uri).timeout(const Duration(seconds: 20));
+      if (r.statusCode != 200) throw ApiException('wave → ${r.statusCode}');
+      // The wave is the one screen that must not go blank on a train: the last
+      // batch computed while online is cached per seed.
+      await _cache('wave-${seed ?? 'taste'}', r.body);
+      return WaveReply.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+    } catch (_) {
+      final cached = await _cached('wave-${seed ?? 'taste'}');
+      if (cached == null) rethrow;
+      return WaveReply.fromJson(jsonDecode(cached) as Map<String, dynamic>);
+    }
   }
 }
 
