@@ -119,6 +119,7 @@ impl Cache {
         let ext = match format {
             "jpeg" | "jpg" => "jpg",
             "png" => "png",
+            "jxl" => "jxl",
             _ => "webp",
         };
         let out = self
@@ -141,6 +142,12 @@ impl Cache {
             }
             "jpg" => {
                 cmd.args(["-c:v", "mjpeg", "-q:v", "4", "-f", "image2"]);
+            }
+            // ~11% smaller than webp q82 on a real cover and visibly cleaner,
+            // but no Flutter client can decode it without shipping libjxl:
+            // this is for web clients and for the record, not the phone.
+            "jxl" => {
+                cmd.args(["-c:v", "libjxl", "-quality", "90", "-f", "image2"]);
             }
             _ => {
                 cmd.args(["-c:v", "png", "-f", "image2"]);

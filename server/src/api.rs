@@ -1931,6 +1931,7 @@ async fn cover(
         let mime = match derived.extension().and_then(|e| e.to_str()) {
             Some("webp") => "image/webp",
             Some("jpg") => "image/jpeg",
+            Some("jxl") => "image/jxl",
             _ => "image/png",
         };
         return Response::builder()
