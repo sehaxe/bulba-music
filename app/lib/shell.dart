@@ -96,12 +96,30 @@ class _ShellState extends State<Shell> {
   int? get _artistId => _stack.isEmpty ? null : _stack.last.artistId;
   int? get _albumId => _stack.isEmpty ? null : _stack.last.albumId;
 
+  /// `BULBA_PLAYLIST=12` opens that playlist on launch. Same review harness as
+  /// BULBA_ALBUM: a screen that can only be reached by three taps is a screen
+  /// that never gets looked at.
+  void _openPlaylistFromEnv() {
+    final id = int.tryParse(Platform.environment['BULBA_PLAYLIST'] ?? '');
+    if (id == null) return;
+    widget.api.playlists().then((list) {
+      if (!mounted) return;
+      for (final pl in list) {
+        if (pl.id == id) {
+          setState(() => _stack.add(_Place.playlist(pl)));
+          return;
+        }
+      }
+    }, onError: (_) {});
+  }
+
   @override
   void initState() {
     super.initState();
     widget.player.addListener(_onPlayer);
     _load();
     widget.likes.load();
+    _openPlaylistFromEnv();
   }
 
   @override

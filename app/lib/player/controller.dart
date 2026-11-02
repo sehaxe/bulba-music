@@ -138,6 +138,10 @@ class PlayerController extends ChangeNotifier {
     Track track, {
     List<Track>? queue,
     int source = SignalLog.srcQueue,
+
+    /// Resume point, used by «продолжить» so a track picked up on another
+    /// device starts where it stopped instead of at zero.
+    Duration? startAt,
   }) async {
     final previous = current;
     if (previous != null && previous.id == track.id) {
@@ -201,6 +205,24 @@ class PlayerController extends ChangeNotifier {
     await _active.open(
       Media(api.stream(track.id, quality: quality).toString()),
     );
+    if (startAt != null && startAt > Duration.zero) {
+      final total = _duration.inMilliseconds;
+      if (total > 0) await seek(startAt.inMilliseconds / total);
+    }
+    _cursor?.cancel();
+    _cursor = Timer.periodic(const Duration(seconds: 10), (_) => _pushCursor());
+  }
+
+  /// The server keeps one cursor per listener so the phone can pick up what the
+  /// desktop was playing. Fire and forget: a lost cursor is not a failed play.
+  Timer? _cursor;
+
+  Future<void> _pushCursor() async {
+    final t = current;
+    if (t == null || !_playing) return;
+    try {
+      await api.putCursor(t.id, position.inMilliseconds);
+    } catch (_) {}
   }
 
   Future<void> next() async {
@@ -417,6 +439,7 @@ class PlayerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _cursor?.cancel();
     _fade?.cancel();
     _progress?.cancel();
     signals.flush();

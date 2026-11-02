@@ -19,6 +19,7 @@ class TrackRow extends StatefulWidget {
     this.onLike,
     this.onMenu,
     this.subtitle,
+    this.leading,
   });
 
   final Track track;
@@ -37,6 +38,10 @@ class TrackRow extends StatefulWidget {
   /// Overrides the artist/album line — an album page does not need to repeat
   /// its own name on all thirteen rows.
   final String? subtitle;
+
+  /// Replaces the index number — a playlist hands in a drag handle here so the
+  /// request to reorder is visible instead of hidden behind a long press.
+  final Widget? leading;
 
   @override
   State<TrackRow> createState() => _TrackRowState();
@@ -91,7 +96,10 @@ class _TrackRowState extends State<TrackRow> {
               final narrow = MediaQuery.sizeOf(context).width < 520;
               return Row(
                 children: [
-                  if (widget.index != null && !narrow) ...[
+                  if (widget.leading != null && !narrow) ...[
+                    widget.leading!,
+                    const SizedBox(width: S.sm),
+                  ] else if (widget.index != null && !narrow) ...[
                     SizedBox(
                       width: 26,
                       child: Text(

@@ -18,6 +18,11 @@ Future<void> showTrackMenu(
   required PlayerController player,
   required LikesStore likes,
   required VoidCallback onRadio,
+
+  /// Set when the sheet is opened from inside one of the user's playlists:
+  /// removing a track belongs there, not in a global menu everywhere.
+  int? removeFrom,
+  VoidCallback? onRemoved,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -30,6 +35,8 @@ Future<void> showTrackMenu(
       player: player,
       likes: likes,
       onRadio: onRadio,
+      removeFrom: removeFrom,
+      onRemoved: onRemoved,
     ),
   );
 }
@@ -41,12 +48,16 @@ class _TrackSheet extends StatefulWidget {
     required this.player,
     required this.likes,
     required this.onRadio,
+    this.removeFrom,
+    this.onRemoved,
   });
   final Track track;
   final Api api;
   final PlayerController player;
   final LikesStore likes;
   final VoidCallback onRadio;
+  final int? removeFrom;
+  final VoidCallback? onRemoved;
 
   @override
   State<_TrackSheet> createState() => _TrackSheetState();
@@ -186,6 +197,17 @@ class _TrackSheetState extends State<_TrackSheet> {
               accent: liked,
               onTap: () => widget.likes.toggle(t),
             ),
+            if (widget.removeFrom != null)
+              _Item(
+                icon: Icons.playlist_remove_rounded,
+                label: 'убрать из плейлиста',
+                onTap: () async {
+                  await widget.api.removeFromPlaylist(widget.removeFrom!, t.id);
+                  if (!context.mounted) return;
+                  Navigator.of(context).pop();
+                  widget.onRemoved?.call();
+                },
+              ),
             _Item(
               icon: Icons.info_outline_rounded,
               label: 'подробнее',

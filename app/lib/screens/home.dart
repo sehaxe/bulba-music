@@ -183,16 +183,100 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
+/// "Pick up where you left off", across devices: the server holds one cursor
+/// per listener, so this card appears on the phone after the desktop stopped
+/// halfway through a track.
+class _ResumeCard extends StatelessWidget {
+  const _ResumeCard({
+    required this.cursor,
+    required this.api,
+    required this.player,
+  });
+
+  final PlaybackCursor cursor;
+  final Api api;
+  final PlayerController player;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    final accent = AccentScope.of(context);
+    final t = cursor.track!;
+    final left = t.duration - cursor.position;
+    return GestureDetector(
+      onTap: () => player.play(t, startAt: cursor.position),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Container(
+          padding: const EdgeInsets.all(S.md),
+          decoration: BoxDecoration(
+            color: p.soft,
+            border: Border.all(color: p.hairline),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Row(
+            children: [
+              CoverArt(url: api.cover(t.albumId, t.hasCover, w: 128), size: 52),
+              const SizedBox(width: S.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'продолжить · ${_clock(cursor.position)}',
+                      style: T.micro(accent),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      t.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: T.heading(p.ink),
+                    ),
+                    Text(
+                      '${t.artist} · осталось ${_clock(left)}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: T.caption(p.mute),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.play_arrow_rounded, color: accent),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _clock(Duration d) {
+    final m = d.inMinutes;
+    final s = d.inSeconds % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+}
+
 class _HomeScreenState extends State<HomeScreen> {
   List<Mix> _mixes = const [];
   List<StatTrack> _frequent = const [];
   List<Track> _recent = const [];
+  PlaybackCursor? _resume;
 
   @override
   void initState() {
     super.initState();
     _loadMixes();
     _loadRows();
+    _loadCursor();
+  }
+
+  Future<void> _loadCursor() async {
+    try {
+      final c = await widget.api.cursor();
+      if (!mounted) return;
+      setState(() => _resume = c != null && c.resumable ? c : null);
+    } catch (_) {}
   }
 
   /// "Caught often" is the honest name for the first row: the tracks the
@@ -265,6 +349,17 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
         ),
+        if (_resume != null && widget.player.current?.id != _resume!.trackId)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(S.xl, S.lg, S.xl, 0),
+              child: _ResumeCard(
+                cursor: _resume!,
+                api: widget.api,
+                player: widget.player,
+              ),
+            ),
+          ),
         if (_frequent.isNotEmpty || _recent.isNotEmpty)
           SliverToBoxAdapter(
             child: Padding(

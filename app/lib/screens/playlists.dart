@@ -302,6 +302,99 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     }
   }
 
+  /// One menu instead of three buttons: rename, visibility and delete are all
+  /// rare next to play, and every extra chip costs a glyph of attention.
+  Future<void> _manage() async {
+    final p = Palette.of(context);
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        margin: const EdgeInsets.all(S.md),
+        decoration: BoxDecoration(
+          color: p.roomElevated,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(Icons.edit_outlined, color: p.mute),
+              title: Text('переименовать', style: T.body(p.ink)),
+              onTap: () {
+                Navigator.of(context).pop();
+                _rename();
+              },
+            ),
+            ListTile(
+              leading: Icon(Icons.delete_outline_rounded, color: p.mute),
+              title: Text('удалить плейлист', style: T.body(p.ink)),
+              onTap: () {
+                Navigator.of(context).pop();
+                _delete();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _rename() async {
+    final name = await promptName(context, 'название', initial: _pl.name);
+    if (name == null || name.trim().isEmpty) return;
+    await widget.api.patchPlaylist(_pl.id, name: name.trim());
+    await _load();
+    widget.onChanged?.call();
+  }
+
+  Future<void> _delete() async {
+    final p = Palette.of(context);
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: p.roomElevated,
+        title: Text('удалить плейлист?', style: T.heading(p.ink)),
+        content: Text(
+          '«${_pl.name}» исчезнет, треки останутся в библиотеке.',
+          style: T.body(p.mute),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text('нет', style: T.label(p.mute)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text('удалить', style: T.label(AccentScope.of(context))),
+          ),
+        ],
+      ),
+    );
+    if (sure != true) return;
+    await widget.api.deletePlaylist(_pl.id);
+    widget.onChanged?.call();
+    widget.onBack();
+  }
+
+  /// The new callback already adjusts the target index for the removed row.
+  Future<void> _reorderItem(int from, int to) async {
+    final next = [..._tracks];
+    final moved = next.removeAt(from);
+    next.insert(to, moved);
+    setState(() => _tracks = next);
+    try {
+      await widget.api.reorderPlaylist(_pl.id, [for (final t in next) t.id]);
+    } catch (_) {
+      // The server refused; keep the local order but say so instead of lying.
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('порядок не сохранился')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
@@ -357,6 +450,12 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
               if (_pl.mine) ...[
                 const SizedBox(width: S.sm),
                 _Chip(
+                  icon: Icons.more_vert_rounded,
+                  tooltip: 'ещё',
+                  onTap: _manage,
+                ),
+                const SizedBox(width: S.sm),
+                _Chip(
                   icon: _pl.isPublic
                       ? Icons.public_rounded
                       : Icons.lock_outline_rounded,
@@ -387,17 +486,32 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                     style: T.caption(p.mute),
                   ),
                 )
-              : ListView.builder(
+              : ReorderableListView.builder(
                   padding: const EdgeInsets.fromLTRB(S.xl, S.sm, S.xl, S.xxl),
                   itemCount: _tracks.length,
+                  buildDefaultDragHandles: false,
+                  onReorderItem: _reorderItem,
                   itemBuilder: (context, i) {
                     final t = _tracks[i];
                     return TrackRow(
                       key: ValueKey('pl-${_pl.id}-${t.id}'),
                       track: t,
                       index: i + 1,
+                      leading: _pl.mine
+                          ? ReorderableDragStartListener(
+                              index: i,
+                              child: MouseRegion(
+                                cursor: SystemMouseCursors.grab,
+                                child: Icon(
+                                  Icons.drag_indicator_rounded,
+                                  size: 16,
+                                  color: Palette.of(context).ash,
+                                ),
+                              ),
+                            )
+                          : null,
                       playing: widget.player.current?.id == t.id,
-                      coverUrl: widget.api.cover(t.albumId, t.hasCover),
+                      coverUrl: widget.api.cover(t.albumId, t.hasCover, w: 128),
                       onTap: () => widget.player.play(t, queue: _tracks),
                       onRadio: () => widget.onRadio(t),
                       onMenu: () => showTrackMenu(
@@ -407,6 +521,8 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                         player: widget.player,
                         likes: widget.likes,
                         onRadio: () => widget.onRadio(t),
+                        removeFrom: _pl.mine ? _pl.id : null,
+                        onRemoved: _load,
                       ),
                       liked: widget.likes.contains(t.id),
                       onLike: () => widget.likes.toggle(t),

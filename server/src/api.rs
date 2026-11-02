@@ -44,7 +44,10 @@ pub fn router(state: AppState) -> Router {
             "/api/playlists/{id}",
             get(get_playlist).patch(patch_playlist).delete(delete_playlist),
         )
-        .route("/api/playlists/{id}/tracks", post(add_playlist_track))
+        .route(
+            "/api/playlists/{id}/tracks",
+            post(add_playlist_track).put(reorder_playlist),
+        )
         .route(
             "/api/playlists/{id}/tracks/{track_id}",
             axum::routing::delete(remove_playlist_track),
@@ -67,6 +70,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/manifest", get(manifest))
         .route("/api/events", post(record_events))
         .route("/api/stats", get(stats))
+        .route("/api/playback", get(get_playback).post(put_playback))
         .route("/api/info", get(info))
         .route("/api/auth/register", post(register))
         .route("/api/auth/login", post(login))
@@ -643,6 +647,113 @@ async fn delete_playlist(
 struct PlaylistTrackBody {
     track_id: i64,
     position: Option<i64>,
+}
+
+#[derive(serde::Deserialize)]
+struct CursorBody {
+    track_id: i64,
+    position_ms: i64,
+}
+
+#[derive(serde::Serialize)]
+struct CursorOut {
+    track_id: i64,
+    position_ms: i64,
+    updated_at: i64,
+    track: Option<serde_json::Value>,
+}
+
+async fn get_playback(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<Option<CursorOut>>, ApiError> {
+    let db = st.db.clone();
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<CursorOut>> {
+        let conn = db.open()?;
+        let Some(me) = user_from(&headers, &conn, caller.local)? else {
+            return Ok(None);
+        };
+        let row = conn
+            .query_row(
+                "SELECT track_id, position_ms, updated_at FROM playback_cursor
+                 WHERE user_id=?1",
+                [me],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)),
+            )
+            .ok();
+        let Some((track_id, position_ms, updated_at)) = row else {
+            return Ok(None);
+        };
+        let track = {
+            let mut stmt =
+                conn.prepare(&format!("SELECT {TRACK_COLUMNS} FROM v_track WHERE id=?1"))?;
+            stmt.query_row([track_id], map_track).ok().map(|t| {
+                serde_json::to_value(t).unwrap_or(serde_json::Value::Null)
+            })
+        };
+        Ok(Some(CursorOut {
+            track_id,
+            position_ms,
+            updated_at,
+            track,
+        }))
+    })
+    .await??;
+    Ok(Json(out))
+}
+
+async fn put_playback(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<CursorBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let conn = db.open()?;
+        let Some(me) = user_from(&headers, &conn, caller.local)? else {
+            return Ok(());
+        };
+        conn.execute(
+            "INSERT INTO playback_cursor(user_id, track_id, position_ms, updated_at)
+             VALUES(?1, ?2, ?3, unixepoch())
+             ON CONFLICT(user_id) DO UPDATE SET
+               track_id=excluded.track_id,
+               position_ms=excluded.position_ms,
+               updated_at=excluded.updated_at",
+            rusqlite::params![me, body.track_id, body.position_ms],
+        )?;
+        Ok(())
+    })
+    .await??;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(serde::Deserialize)]
+struct ReorderBody {
+    track_ids: Vec<i64>,
+}
+
+async fn reorder_playlist(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<i64>,
+    Json(body): Json<ReorderBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    let ok = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let conn = db.open()?;
+        let me = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
+        crate::playlists::reorder(&conn, me, id, &body.track_ids)
+    })
+    .await??;
+    if !ok {
+        return Err(ApiError::forbidden("не твой плейлист"));
+    }
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn add_playlist_track(

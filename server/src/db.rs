@@ -296,6 +296,14 @@ CREATE TABLE IF NOT EXISTS daily_mix (
   PRIMARY KEY (day, slot, position)
 );
 
+-- One row per listener: where they stopped, so another device can continue.
+CREATE TABLE IF NOT EXISTS playback_cursor (
+  user_id     INTEGER PRIMARY KEY REFERENCES user(id),
+  track_id    INTEGER NOT NULL REFERENCES track(id),
+  position_ms INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS peaks (
   track_id INTEGER PRIMARY KEY REFERENCES track(id),
   data     BLOB NOT NULL

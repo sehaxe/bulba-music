@@ -508,6 +508,36 @@ class _AuthClient extends http.BaseClient {
   }
 }
 
+/// The last thing this listener was playing, with enough context to offer
+/// "continue" without a second request.
+class PlaybackCursor {
+  const PlaybackCursor({
+    required this.trackId,
+    required this.positionMs,
+    required this.updatedAt,
+    this.track,
+  });
+  final int trackId;
+  final int positionMs;
+  final int updatedAt;
+  final Track? track;
+
+  Duration get position => Duration(milliseconds: positionMs);
+
+  /// Worth offering only when there is something left to hear and the point is
+  /// not ancient history.
+  bool get resumable {
+    final t = track;
+    if (t == null) return false;
+    final total = t.duration.inMilliseconds;
+    if (total > 0 && (positionMs < 15000 || positionMs > total - 15000)) {
+      return false;
+    }
+    final age = DateTime.now().millisecondsSinceEpoch - updatedAt;
+    return age < const Duration(days: 7).inMilliseconds;
+  }
+}
+
 class Api {
   Api(this.base) {
     _http = _AuthClient(http.Client(), () => token);
@@ -1014,6 +1044,34 @@ extension WaveApi on Api {
 }
 
 extension PlaylistApi on Api {
+  /// Where this listener stopped, if anywhere. The server keeps one row per
+  /// user, so the phone and the desktop see the same point.
+  Future<PlaybackCursor?> cursor() async {
+    final r = await _http
+        .get(Uri.parse('$base/api/playback'))
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) return null;
+    final j = jsonDecode(r.body);
+    if (j is! Map<String, dynamic>) return null;
+    final track = j['track'];
+    return PlaybackCursor(
+      trackId: j['track_id'] as int,
+      positionMs: j['position_ms'] as int,
+      updatedAt: (j['updated_at'] as int) * 1000,
+      track: track is Map<String, dynamic> ? Track.fromJson(track) : null,
+    );
+  }
+
+  Future<void> putCursor(int trackId, int positionMs) async {
+    await _http
+        .post(
+          Uri.parse('$base/api/playback'),
+          headers: {'content-type': 'application/json'},
+          body: jsonEncode({'track_id': trackId, 'position_ms': positionMs}),
+        )
+        .timeout(const Duration(seconds: 10));
+  }
+
   Future<List<Playlist>> playlists() async {
     final r = await _http
         .get(Uri.parse('$base/api/playlists'))
@@ -1098,6 +1156,19 @@ extension PlaylistApi on Api {
   Future<void> removeFromPlaylist(int id, int trackId) async {
     final r = await _http
         .delete(Uri.parse('$base/api/playlists/$id/tracks/$trackId'))
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) throw ApiException('playlist → ${r.statusCode}');
+  }
+
+  /// Persists a drag-and-drop order. The server takes the full list: swapping
+  /// one pair would leave the other positions ambiguous after a multi-row drag.
+  Future<void> reorderPlaylist(int id, List<int> trackIds) async {
+    final r = await _http
+        .put(
+          Uri.parse('$base/api/playlists/$id/tracks'),
+          headers: {'content-type': 'application/json'},
+          body: jsonEncode({'track_ids': trackIds}),
+        )
         .timeout(const Duration(seconds: 15));
     if (r.statusCode != 200) throw ApiException('playlist → ${r.statusCode}');
   }

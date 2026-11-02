@@ -235,6 +235,31 @@ pub fn remove_track(conn: &Connection, me: i64, id: i64, track_id: i64) -> Resul
     Ok(true)
 }
 
+/// Rewrites the whole order. Drag and drop produces the full list anyway, and a
+/// per-pair swap would need a second endpoint for every direction.
+pub fn reorder(conn: &Connection, me: i64, id: i64, track_ids: &[i64]) -> Result<bool> {
+    let owns: i64 = conn.query_row(
+        "SELECT count(*) FROM playlist WHERE id=?1 AND user_id=?2",
+        params![id, me],
+        |r| r.get(0),
+    )?;
+    if owns == 0 {
+        return Ok(false);
+    }
+    let tx = conn.unchecked_transaction()?;
+    let mut stmt = tx.prepare(
+        "UPDATE playlist_track SET position=?1
+         WHERE playlist_id=?2 AND track_id=?3",
+    )?;
+    for (i, track_id) in track_ids.iter().enumerate() {
+        stmt.execute(params![i as i64, id, track_id])?;
+    }
+    drop(stmt);
+    tx.execute("UPDATE playlist SET rev=rev+1 WHERE id=?1", [id])?;
+    tx.commit()?;
+    Ok(true)
+}
+
 pub fn set_like(conn: &Connection, me: i64, id: i64, on: bool) -> Result<bool> {
     let exists: i64 = conn.query_row(
         "SELECT count(*) FROM playlist WHERE id=?1 AND (user_id=?2 OR is_public=1)",
