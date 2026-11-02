@@ -391,6 +391,55 @@ class _TopBar extends StatelessWidget {
   }
 }
 
+/// Blending belongs where the queue is, not four screens deep in settings: the
+/// answer to "why does it stop between songs" should be one tap away.
+void _crossfadeSheet(BuildContext context, PlayerController player) {
+  final p = Palette.of(context);
+  void pick(int seconds) {
+    player.crossfade = seconds;
+    player.saveCrossfade?.call(seconds);
+    Navigator.of(context).maybePop();
+  }
+
+  showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: p.roomElevated,
+    showDragHandle: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (context) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final s in [0, 4, 8, 12])
+            _MenuRow(
+              icon: player.crossfade == s
+                  ? Icons.radio_button_checked_rounded
+                  : Icons.radio_button_off_rounded,
+              label: s == 0
+                  ? 'резкие · без перехода'
+                  : '$s с · ${s <= 4
+                        ? 'короткий'
+                        : s <= 8
+                        ? 'средний'
+                        : 'длинный'}',
+              onTap: () => pick(s),
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(S.lg, S.sm, S.lg, S.md),
+            child: Text(
+              'длина выбирается по тональности: тот же ключ — весь отрезок, '
+              'сосед по колесу — две трети, конфликт — треть.',
+              style: T.micro(p.ash),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 void _openMenu(
   BuildContext context,
   PlayerController player,
@@ -417,6 +466,16 @@ void _openMenu(
             onTap: () {
               Navigator.of(context).maybePop();
               onRadio(track);
+            },
+          ),
+          _MenuRow(
+            icon: Icons.shuffle_rounded,
+            label: player.crossfade == 0
+                ? 'переходы: резкие'
+                : 'переходы: ${player.crossfade} с',
+            onTap: () {
+              Navigator.of(context).maybePop();
+              _crossfadeSheet(context, player);
             },
           ),
           _MenuRow(

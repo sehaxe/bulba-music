@@ -81,7 +81,10 @@ class _BulbaAppState extends State<BulbaApp> {
     final prefs = await Prefs.load();
     themeMode.value = Prefs.modeFrom(prefs.themeMode);
     api.token = prefs.token;
-    player.crossfade = prefs.crossfade;
+    player.crossfade =
+        int.tryParse(Platform.environment['BULBA_CROSSFADE'] ?? '') ??
+        prefs.crossfade;
+    player.saveCrossfade = prefs.setCrossfade;
     player.quality = prefs.quality;
     player.replayGain = prefs.replayGain;
     await player.setEq(prefs.eq);
@@ -102,6 +105,15 @@ class _BulbaAppState extends State<BulbaApp> {
         Platform.environment['BULBA_SKIP_ONBOARDING'] == '1';
     // `BULBA_DOWNLOAD=<id>` downloads one track on boot. The download path is
     // otherwise reachable only by hand, and "offline works" is worth proving.
+    // `BULBA_PLAY=<id>` starts that track on boot: the mix engine only runs
+    // between tracks, and hearing (or at least logging) a real transition is
+    // the only way to know it works.
+    final playId = int.tryParse(Platform.environment['BULBA_PLAY'] ?? '');
+    if (playId != null) {
+      api.track(playId).then((t) {
+        if (t != null) player.play(t);
+      }, onError: (_) {});
+    }
     final dlId = int.tryParse(Platform.environment['BULBA_DOWNLOAD'] ?? '');
     if (dlId != null) {
       api.track(dlId).then((t) {

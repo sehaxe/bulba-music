@@ -41,6 +41,10 @@ class PlayerController extends ChangeNotifier {
   /// Seconds of overlap, 0 disables it.
   int crossfade = 0;
 
+  /// Set by the app so a choice made in the player survives a restart, the same
+  /// way the settings slider persists its own.
+  void Function(int seconds)? saveCrossfade;
+
   /// 'flac' streams the master; opus96/128/160 ask the server for a smaller
   /// copy, which is what a phone on mobile data should use.
   String quality = 'flac';
@@ -525,42 +529,64 @@ class PlayerController extends ChangeNotifier {
     );
     final outgoing = _active;
     final target = _idle;
-    await target.setVolume(0);
-    await target.open(
-      Media(api.stream(incoming.id, quality: quality).toString()),
-    );
+    try {
+      await target.setVolume(0);
+      await target.open(
+        Media(api.stream(incoming.id, quality: quality).toString()),
+      );
+    } catch (e) {
+      // A deck that refuses to open must not leave the fade half-armed: with
+      // _fading stuck true every later transition is silently skipped, which is
+      // exactly what "the blends never work" looks like from the outside.
+      debugPrint('[fade] deck refused: $e');
+      _fading = false;
+      _fadeStartedFor = null;
+      await outgoing.setVolume(_volume * 100);
+      return;
+    }
 
     final total = Duration(seconds: seconds);
     final started = DateTime.now();
     _fade?.cancel();
     _fade = Timer.periodic(const Duration(milliseconds: 50), (timer) async {
-      final t =
-          (DateTime.now().difference(started).inMilliseconds /
-                  total.inMilliseconds)
-              .clamp(0.0, 1.0);
-      // cos/sin keep the summed power constant: a linear fade dips ~3 dB in
-      // the middle, which is audible as a hole in the mix.
-      final theta = t * 3.141592653589793 / 2;
-      await outgoing.setVolume(_volume * 100 * _cos(theta));
-      await target.setVolume(_volume * 100 * _sin(theta));
-      if (t >= 1.0) {
+      try {
+        final t =
+            (DateTime.now().difference(started).inMilliseconds /
+                    total.inMilliseconds)
+                .clamp(0.0, 1.0);
+        // cos/sin keep the summed power constant: a linear fade dips ~3 dB in
+        // the middle, which is audible as a hole in the mix.
+        final theta = t * 3.141592653589793 / 2;
+        await outgoing.setVolume(_volume * 100 * _cos(theta));
+        await target.setVolume(_volume * 100 * _sin(theta));
+        if (t >= 1.0) {
+          timer.cancel();
+          await outgoing.pause();
+          await outgoing.stop();
+          _active = target;
+          _idle.play();
+          _index = nextIndex;
+          current = incoming;
+          _fadeStartedFor = null;
+          _position = Duration.zero;
+          _anchor = Duration.zero;
+          _anchorAt = DateTime.now();
+          _duration = incoming.duration;
+          _playing = true;
+          _fading = false;
+          _pendingSeek = null;
+          debugPrint('[fade] done → ${incoming.title}');
+          notifyListeners();
+        }
+      } catch (e) {
+        // Any failure inside the envelope is a reason to stop blending, not to
+        // leave the next track at half volume forever.
         timer.cancel();
-        await outgoing.pause();
-        await outgoing.stop();
-        _active = target;
-        _idle.play();
-        _index = nextIndex;
-        current = incoming;
-        _fadeStartedFor = null;
-        _position = Duration.zero;
-        _anchor = Duration.zero;
-        _anchorAt = DateTime.now();
-        _duration = incoming.duration;
-        _playing = true;
         _fading = false;
-        _pendingSeek = null;
-        debugPrint('[fade] done → ${incoming.title}');
-        notifyListeners();
+        _fadeStartedFor = null;
+        await outgoing.setVolume(_volume * 100);
+        await target.setVolume(_volume * 100);
+        debugPrint('[fade] aborted: $e');
       }
     });
   }

@@ -20,7 +20,10 @@ class Prefs {
   double get volume => _sp.getDouble('volume') ?? 1.0;
   Future<void> setVolume(double v) => _sp.setDouble('volume', v);
 
-  int get crossfade => _sp.getInt('crossfade_seconds') ?? 0;
+  /// Eight seconds by default: a library played end to end is a set, and a set
+  /// does not stop between songs. Zero stays zero once chosen — the slider is the
+  /// only thing that can say "I want hard cuts".
+  int get crossfade => _sp.getInt('crossfade_seconds') ?? 8;
   Future<void> setCrossfade(int v) => _sp.setInt('crossfade_seconds', v);
 
   bool get replayGain => _sp.getBool('replay_gain') ?? true;
