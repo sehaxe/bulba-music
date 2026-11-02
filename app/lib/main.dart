@@ -78,6 +78,8 @@ class _BulbaAppState extends State<BulbaApp> {
     api.token = prefs.token;
     player.crossfade = prefs.crossfade;
     player.quality = prefs.quality;
+    player.replayGain = prefs.replayGain;
+    await player.setEq(prefs.eq);
     final savedServer = prefs.server;
     if (savedServer != null && savedServer.isNotEmpty) api.base = savedServer;
     player.setVolume(prefs.volume);

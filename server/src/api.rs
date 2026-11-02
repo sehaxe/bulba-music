@@ -160,11 +160,14 @@ pub struct Track {
     pub master_count: i64,
     pub created_at: i64,
     pub rev: i64,
+    /// EBU R128 integrated loudness, filled when features are built. The client
+    /// evens out track-to-track level with it.
+    pub loudness: Option<f64>,
 }
 
 pub const TRACK_COLUMNS: &str = "id, title, artist, album, album_id, has_cover, year, disc,
     track_no, duration_ms, codec, bitrate, sample_rate, bits, channels, bytes, master_count,
-    created_at, rev";
+    created_at, rev, loudness_db";
 
 pub fn map_track(r: &rusqlite::Row) -> rusqlite::Result<Track> {
     Ok(Track {
@@ -187,6 +190,7 @@ pub fn map_track(r: &rusqlite::Row) -> rusqlite::Result<Track> {
         master_count: r.get(16)?,
         created_at: r.get(17)?,
         rev: r.get(18)?,
+        loudness: r.get(19).ok(),
     })
 }
 
@@ -1280,6 +1284,7 @@ async fn record_events(
 #[derive(Debug, Deserialize)]
 struct BuildQuery {
     limit: Option<i64>,
+    loudness: Option<bool>,
 }
 
 /// Computes content embeddings for tracks that do not have one yet.
@@ -1291,10 +1296,23 @@ async fn build_features(
     let limit = q.limit.unwrap_or(200).clamp(1, 5000);
     let db = st.db.clone();
     let st_db_path = st.db.path().to_path_buf();
+    let loudness_only = q.loudness.unwrap_or(false);
     let stats = tokio::task::spawn_blocking(move || -> anyhow::Result<(usize, i64)> {
         let conn = db.open()?;
         let rows: Vec<(i64, String)> = {
-            let mut stmt = conn.prepare(
+            // `?loudness=1` is a different pass: loudness was added after the
+            // library had already been embedded, and re-decoding every file for
+            // its mel bands again would be pure waste.
+            let sql = if loudness_only {
+                "SELECT t.id, m.path
+                 FROM track t
+                 JOIN track_master tm ON tm.track_id = t.id
+                 JOIN master m ON m.id = tm.master_id
+                 WHERE t.loudness_db IS NULL
+                 GROUP BY t.id
+                 ORDER BY t.id
+                 LIMIT ?2"
+            } else {
                 "SELECT t.id, m.path
                  FROM track t
                  JOIN track_master tm ON tm.track_id = t.id
@@ -1303,8 +1321,9 @@ async fn build_features(
                      SELECT 1 FROM embed e WHERE e.track_id = t.id AND e.model = ?1)
                  GROUP BY t.id
                  ORDER BY t.id
-                 LIMIT ?2",
-            )?;
+                 LIMIT ?2"
+            };
+            let mut stmt = conn.prepare(sql)?;
             stmt.query_map(rusqlite::params![crate::features::MODEL, limit], |r| {
                 Ok((r.get(0)?, r.get(1)?))
             })?
@@ -1328,6 +1347,16 @@ async fn build_features(
                         return;
                     };
                     for (id, path) in part {
+                        if loudness_only {
+                            if let Ok(Some(l)) = crate::loudness::lufs(path) {
+                                let _ = conn.execute(
+                                    "UPDATE track SET loudness_db=?1 WHERE id=?2",
+                                    rusqlite::params![l, id],
+                                );
+                            }
+                            done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            continue;
+                        }
                         match crate::features::extract(path) {
                             Ok(fp) => {
                                 let _ = conn.execute(
@@ -1352,6 +1381,14 @@ async fn build_features(
                                         fp.mode as f64
                                     ],
                                 );
+                                // ReplayGain needs the integrated loudness, and
+                                // the decode is already happening next door.
+                                if let Ok(Some(l)) = crate::loudness::lufs(path) {
+                                    let _ = conn.execute(
+                                        "UPDATE track SET loudness_db=?1 WHERE id=?2",
+                                        rusqlite::params![l, id],
+                                    );
+                                }
                                 done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             }
                             Err(e) => {

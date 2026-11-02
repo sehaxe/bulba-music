@@ -413,6 +413,18 @@ void _openMenu(
             },
           ),
           _MenuRow(
+            icon: Icons.bedtime_outlined,
+            label: player.sleepAt == null
+                ? (player.sleepAfterTrack
+                      ? 'таймер: после этого трека'
+                      : 'таймер сна')
+                : 'таймер: ${_untilLabel(player.sleepAt!)}',
+            onTap: () {
+              Navigator.of(context).maybePop();
+              _sleepSheet(context, player);
+            },
+          ),
+          _MenuRow(
             icon: Icons.download_rounded,
             label: 'download · ${track.format}',
           ),
@@ -420,6 +432,59 @@ void _openMenu(
             icon: Icons.info_outline_rounded,
             label: '${track.album} · ${track.year ?? '—'}',
           ),
+        ],
+      ),
+    ),
+  );
+}
+
+String _untilLabel(DateTime at) {
+  final left = at.difference(DateTime.now());
+  if (left.isNegative) return 'выключается';
+  final m = left.inMinutes;
+  if (m < 1) return 'меньше минуты';
+  return '$m мин';
+}
+
+void _sleepSheet(BuildContext context, PlayerController player) {
+  final p = Palette.of(context);
+  showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: p.roomElevated,
+    showDragHandle: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (context) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final minutes in const [15, 30, 60, 90])
+            _MenuRow(
+              icon: Icons.timer_outlined,
+              label: 'через $minutes мин',
+              onTap: () {
+                player.setSleep(Duration(minutes: minutes));
+                Navigator.of(context).maybePop();
+              },
+            ),
+          _MenuRow(
+            icon: Icons.music_note_outlined,
+            label: 'после этого трека',
+            onTap: () {
+              player.setSleepAfterTrack();
+              Navigator.of(context).maybePop();
+            },
+          ),
+          if (player.sleepAt != null || player.sleepAfterTrack)
+            _MenuRow(
+              icon: Icons.close_rounded,
+              label: 'выключить таймер',
+              onTap: () {
+                player.cancelSleep();
+                Navigator.of(context).maybePop();
+              },
+            ),
         ],
       ),
     ),

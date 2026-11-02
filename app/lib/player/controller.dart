@@ -2,8 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart' show Media, Player;
+// media_kit keeps mpv's property accessor on the native platform object and
+// does not export it. The alternative is no equaliser at all.
+// ignore: implementation_imports
+import 'package:media_kit/src/player/native/player/real.dart' show NativePlayer;
 
 import '../api/client.dart';
+import 'gain.dart';
 import 'signals.dart';
 
 class _PendingSeek {
@@ -94,6 +99,12 @@ class PlayerController extends ChangeNotifier {
           position: _duration,
           length: _duration,
         );
+      }
+      if (sleepAfterTrack) {
+        sleepAfterTrack = false;
+        _playing = false;
+        notifyListeners();
+        return;
       }
       next();
     });
@@ -205,6 +216,9 @@ class PlayerController extends ChangeNotifier {
     await _active.open(
       Media(api.stream(track.id, quality: quality).toString()),
     );
+    // A new track means a new loudness value: re-apply level matching now
+    // rather than on the next volume nudge.
+    await _active.setVolume(effectiveVolume);
     if (startAt != null && startAt > Duration.zero) {
       final total = _duration.inMilliseconds;
       if (total > 0) await seek(startAt.inMilliseconds / total);
@@ -247,8 +261,98 @@ class PlayerController extends ChangeNotifier {
     _volume = v.clamp(0.0, 1.0);
     notifyListeners();
     if (_fading) return; // the fade owns both decks while it runs
-    await _active.setVolume(_volume * 100);
+    await _active.setVolume(effectiveVolume);
   }
+
+  /// Level matching, EBU R128 -> -14 LUFS, bounded so a quiet master is not
+  /// pushed into clipping and a loud one is not turned into a whisper.
+  bool replayGain = true;
+
+  double get gainDb => replayGain ? gainForLoudness(current?.loudness) : 0;
+
+  /// What the deck is actually told, in mpv's 0..100+ scale.
+  double get effectiveVolume {
+    return (_volume * 100 * gainFactor(gainDb)).clamp(0.0, 130.0);
+  }
+
+  /// Ten bands, mpv's `af` chain. Presets are the honest set for a phone
+  /// speaker and headphones; a parametric editor is a different product.
+  String eqPreset = 'flat';
+  static const Map<String, List<double>> eqPresets = {
+    'flat': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    'bass': [6, 5, 4, 2, 0, 0, 0, 0, 1, 2],
+    'vocal': [-2, -1, 0, 2, 4, 4, 3, 1, 0, -1],
+    'night': [2, 2, 1, 0, -1, -2, -3, -4, -3, -2],
+  };
+  static const _eqFreqs = [
+    31,
+    62,
+    125,
+    250,
+    500,
+    1000,
+    2000,
+    4000,
+    8000,
+    16000,
+  ];
+
+  Future<void> setEq(String preset) async {
+    eqPreset = eqPresets.containsKey(preset) ? preset : 'flat';
+    notifyListeners();
+    final chain = _eqChain();
+    for (final deck in [_deckA, _deckB]) {
+      final platform = deck.platform;
+      if (platform is NativePlayer) {
+        await platform.setProperty('af', chain);
+      }
+    }
+  }
+
+  String _eqChain() {
+    final bands = eqPresets[eqPreset]!;
+    if (bands.every((g) => g == 0)) return '';
+    final parts = <String>[];
+    for (var i = 0; i < bands.length; i++) {
+      if (bands[i] == 0) continue;
+      parts.add(
+        'equalizer=f=${_eqFreqs[i]}:width_type=o:width=1.4:g=${bands[i]}',
+      );
+    }
+    return parts.join(',');
+  }
+
+  // ---- sleep timer -------------------------------------------------------
+  Timer? _sleep;
+  DateTime? sleepAt;
+  bool sleepAfterTrack = false;
+
+  /// `null` cancels. The countdown is wall-clock: pausing does not stop it,
+  /// which is what people expect from "turn it off in 30 minutes".
+  void setSleep(Duration? after) {
+    _sleep?.cancel();
+    _sleep = null;
+    sleepAt = after == null ? null : DateTime.now().add(after);
+    sleepAfterTrack = false;
+    if (after != null) {
+      _sleep = Timer(after, () {
+        sleepAt = null;
+        if (_playing) toggle();
+        notifyListeners();
+      });
+    }
+    notifyListeners();
+  }
+
+  void setSleepAfterTrack() {
+    _sleep?.cancel();
+    _sleep = null;
+    sleepAt = null;
+    sleepAfterTrack = true;
+    notifyListeners();
+  }
+
+  void cancelSleep() => setSleep(null);
 
   Future<void> toggleMute() => setVolume(_volume == 0 ? 1 : 0);
 

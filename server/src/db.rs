@@ -338,7 +338,8 @@ SELECT
     WHERE tm.track_id = t.id ORDER BY (m.codec = 'flac') DESC, m.bytes DESC LIMIT 1) AS bytes,
   (SELECT count(*) FROM track_master tm WHERE tm.track_id = t.id) AS master_count,
   t.created_at,
-  t.rev
+  t.rev,
+  t.loudness_db
 FROM track t
 JOIN album  al ON al.id = t.album_id
 JOIN artist ar ON ar.id = al.artist_id;

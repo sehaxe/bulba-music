@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What Android Auto is allowed to do with this app. "media" is the whole
+     media-browse surface: audio_service supplies the MediaBrowserService, this
+     file is the permission slip that makes it visible in a car. -->
+<automotiveApp>
+    <uses name="media" />
+</automotiveApp>

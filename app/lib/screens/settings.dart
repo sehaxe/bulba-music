@@ -344,6 +344,62 @@ class _SettingsScreenState extends State<SettingsScreen> {
             style: T.micro(p.ash),
           ),
           const SizedBox(height: S.lg),
+          Text('выравнивание громкости', style: T.caption(p.mute)),
+          const SizedBox(height: S.sm),
+          Wrap(
+            spacing: S.sm,
+            runSpacing: S.sm,
+            children: [
+              _Choice(
+                label: 'ReplayGain · до −14 LUFS',
+                selected: widget.player.replayGain,
+                onTap: () {
+                  widget.player.replayGain = !widget.player.replayGain;
+                  widget.prefs.setReplayGain(widget.player.replayGain);
+                  widget.player.setVolume(widget.player.volume);
+                  setState(() {});
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: S.sm),
+          Text(
+            'Громкость выравнивается по EBU R128, посчитанной при импорте: тихий '
+            'мастер больше не играет вдвое тише громкого. Сейчас '
+            '${_gainLabel(widget.player.gainDb)} к текущему треку.',
+            style: T.micro(p.ash),
+          ),
+          const SizedBox(height: S.lg),
+          Text('эквалайзер', style: T.caption(p.mute)),
+          const SizedBox(height: S.sm),
+          Wrap(
+            spacing: S.sm,
+            runSpacing: S.sm,
+            children: [
+              for (final entry in const [
+                ('flat', 'flat'),
+                ('bass', 'бас'),
+                ('vocal', 'вокал'),
+                ('night', 'ночь'),
+              ])
+                _Choice(
+                  label: entry.$2,
+                  selected: widget.player.eqPreset == entry.$1,
+                  onTap: () {
+                    widget.player.setEq(entry.$1);
+                    widget.prefs.setEq(entry.$1);
+                    setState(() {});
+                  },
+                ),
+            ],
+          ),
+          const SizedBox(height: S.sm),
+          Text(
+            'Десять полос в mpv: усиления ниже ±6 дБ, ширина 1.4 октавы. '
+            '«ночь» срезает и верх, и низ — чтобы не будить соседей.',
+            style: T.micro(p.ash),
+          ),
+          const SizedBox(height: S.lg),
           Text('поток', style: T.caption(p.mute)),
           const SizedBox(height: S.sm),
           Wrap(
@@ -515,6 +571,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         ];
     }
+  }
+
+  static String _gainLabel(double db) {
+    if (db.abs() < 0.05) return '0 дБ';
+    return '${db > 0 ? '+' : ''}${db.toStringAsFixed(1)} дБ';
   }
 
   static String _bytes(double b) {

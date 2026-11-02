@@ -20,6 +20,7 @@ class Track {
     this.sampleRate,
     this.bits,
     this.rev = 0,
+    this.loudness,
   });
 
   final int id;
@@ -39,6 +40,10 @@ class Track {
   final int? bits;
   final int rev;
 
+  /// EBU R128 integrated loudness in LUFS. Null for tracks whose features were
+  /// never built; level matching simply skips those.
+  final double? loudness;
+
   factory Track.fromJson(Map<String, dynamic> j) => Track(
     id: j['id'] as int,
     title: (j['title'] ?? 'untitled') as String,
@@ -56,6 +61,7 @@ class Track {
     sampleRate: j['sample_rate'] as int?,
     bits: j['bits'] as int?,
     rev: (j['rev'] ?? 0) as int,
+    loudness: (j['loudness'] as num?)?.toDouble(),
   );
 
   Duration get duration => Duration(milliseconds: durationMs ?? 0);

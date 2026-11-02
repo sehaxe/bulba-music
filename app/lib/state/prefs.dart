@@ -23,6 +23,12 @@ class Prefs {
   int get crossfade => _sp.getInt('crossfade_seconds') ?? 0;
   Future<void> setCrossfade(int v) => _sp.setInt('crossfade_seconds', v);
 
+  bool get replayGain => _sp.getBool('replay_gain') ?? true;
+  Future<void> setReplayGain(bool v) => _sp.setBool('replay_gain', v);
+
+  String get eq => _sp.getString('eq_preset') ?? 'flat';
+  Future<void> setEq(String v) => _sp.setString('eq_preset', v);
+
   String get quality => _sp.getString('quality') ?? 'flac';
   Future<void> setQuality(String q) => _sp.setString('quality', q);
 

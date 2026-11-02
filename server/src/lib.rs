@@ -1,4 +1,5 @@
 pub mod api;
+pub mod loudness;
 pub mod auth;
 pub mod daily;
 pub mod db;
