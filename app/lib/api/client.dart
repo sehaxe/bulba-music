@@ -134,6 +134,27 @@ class SearchArtist {
   );
 }
 
+class SmartList {
+  const SmartList({
+    required this.id,
+    required this.title,
+    required this.note,
+    required this.count,
+  });
+
+  final String id;
+  final String title;
+  final String note;
+  final int count;
+
+  factory SmartList.fromJson(Map<String, dynamic> j) => SmartList(
+    id: j['id'] as String,
+    title: j['title'] as String,
+    note: j['note'] as String,
+    count: (j['count'] ?? 0) as int,
+  );
+}
+
 class MoodResult {
   const MoodResult({required this.phrase, required this.tracks});
   final String? phrase;
@@ -760,6 +781,28 @@ class Api {
           .map((e) => Track.fromJson(e as Map<String, dynamic>))
           .toList(),
     );
+  }
+
+  /// The four questions the library can answer about itself. Counts let the UI
+  /// hide a list that would play nothing.
+  Future<List<SmartList>> smartLists() async {
+    final r = await _http
+        .get(Uri.parse('$base/api/smart'))
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) throw ApiException('smart → ${r.statusCode}');
+    return (jsonDecode(r.body) as List<dynamic>)
+        .map((e) => SmartList.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<List<Track>> smartTracks(String id) async {
+    final r = await _http
+        .get(Uri.parse('$base/api/smart/$id'))
+        .timeout(const Duration(seconds: 20));
+    if (r.statusCode != 200) throw ApiException('smart/$id → ${r.statusCode}');
+    return (jsonDecode(r.body) as List<dynamic>)
+        .map((e) => Track.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   /// Radio from a collection: the centroid of everything inside it, ranked

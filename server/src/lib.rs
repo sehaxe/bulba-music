@@ -15,6 +15,7 @@ pub mod playlists;
 pub mod scan;
 pub mod mood;
 pub mod serve;
+pub mod smart;
 pub mod taste;
 pub mod search;
 pub mod stats;

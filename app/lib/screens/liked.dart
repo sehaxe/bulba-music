@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
@@ -36,7 +38,7 @@ class LikedScreen extends StatefulWidget {
 class _LikedScreenState extends State<LikedScreen> {
   /// 0 tracks, 1 playlists. Playlists live here because a liked playlist is
   /// the same kind of thing as a liked track: something you marked.
-  int _mode = 0;
+  int _mode = int.tryParse(Platform.environment['BULBA_LIKED_MODE'] ?? '') ?? 0;
   @override
   void initState() {
     super.initState();

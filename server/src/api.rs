@@ -42,6 +42,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/recs/playlist/{id}", get(playlist_radio))
         .route("/api/recs/reject", post(reject_track))
         .route("/api/recs/later", post(later_track))
+        .route("/api/smart", get(smart_lists))
+        .route("/api/smart/{id}", get(smart_list))
         .route("/api/likes", get(list_likes))
         .route("/api/likes/ids", get(like_ids))
         .route("/api/likes/{id}", post(add_like).delete(remove_like))
@@ -1554,6 +1556,43 @@ async fn later_track(
     })
     .await??;
     Ok(Json(json!({ "ok": true })))
+}
+
+async fn smart_lists(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: HeaderMap,
+) -> Result<Json<Vec<crate::smart::SmartList>>, ApiError> {
+    let db = st.db.clone();
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<crate::smart::SmartList>> {
+        let conn = db.open()?;
+        let me = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
+        crate::smart::presets(&conn, me)
+    })
+    .await??;
+    Ok(Json(out))
+}
+
+async fn smart_list(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<Track>>, ApiError> {
+    let Some(preset) = crate::smart::Preset::parse(&id) else {
+        return Err(ApiError::bad_request("неизвестный список"));
+    };
+    let db = st.db.clone();
+    let tracks = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Track>> {
+        let conn = db.open()?;
+        let me = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
+        let ids = crate::smart::ids(&conn, me, preset)?;
+        tracks_by_ids(&conn, &ids)
+    })
+    .await??;
+    Ok(Json(tracks))
 }
 
 #[derive(Debug, Deserialize)]

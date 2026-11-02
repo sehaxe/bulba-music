@@ -38,6 +38,7 @@ class PlaylistsScreen extends StatefulWidget {
 
 class _PlaylistsScreenState extends State<PlaylistsScreen> {
   List<Playlist> _items = const [];
+  List<SmartList> _smart = const [];
   bool _loading = true;
 
   @override
@@ -49,9 +50,14 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
   Future<void> _load() async {
     try {
       final items = await widget.api.playlists();
+      final smart = await widget.api.smartLists().catchError(
+        (_) => const <SmartList>[],
+        test: (_) => true,
+      );
       if (mounted) {
         setState(() {
           _items = items;
+          _smart = smart;
           _loading = false;
         });
       }
@@ -100,25 +106,54 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
               ],
             ),
           )
-        : ListView.separated(
+        : ListView(
             padding: EdgeInsets.fromLTRB(
               S.xl,
               widget.embedded ? S.md : S.sm,
               S.xl,
               S.xxl,
             ),
-            itemCount: _items.length,
-            separatorBuilder: (_, _) => const SizedBox(height: S.sm),
-            itemBuilder: (context, i) => _PlaylistCard(
-              playlist: _items[i],
-              api: widget.api,
-              onOpen: () => widget.onOpen(_items[i]),
-              onLike: () async {
-                final pl = _items[i];
-                await widget.api.likePlaylist(pl.id, on: !pl.liked);
-                await _load();
-              },
-            ),
+            children: [
+              if (_smart.any((s) => s.count > 0)) ...[
+                Row(
+                  children: [
+                    Text('умные', style: T.label(p.mute)),
+                    const SizedBox(width: S.md),
+                    Expanded(child: Hr(color: p.hairline)),
+                  ],
+                ),
+                const SizedBox(height: S.sm),
+                Wrap(
+                  spacing: S.sm,
+                  runSpacing: S.sm,
+                  children: [
+                    for (final s in _smart.where((s) => s.count > 0))
+                      _SmartChip(
+                        list: s,
+                        onTap: () async {
+                          final tracks = await widget.api.smartTracks(s.id);
+                          if (tracks.isEmpty) return;
+                          await widget.player.play(tracks.first, queue: tracks);
+                        },
+                      ),
+                  ],
+                ),
+                const SizedBox(height: S.lg),
+              ],
+              for (var i = 0; i < _items.length; i++) ...[
+                if (i > 0) const SizedBox(height: S.sm),
+                _PlaylistCard(
+                  playlist: _items[i],
+                  api: widget.api,
+                  onOpen: () => widget.onOpen(_items[i]),
+                  onLike: () async {
+                    final pl = _items[i];
+                    await widget.api.likePlaylist(pl.id, on: !pl.liked);
+                    await _load();
+                  },
+                ),
+              ],
+            ],
           );
 
     if (widget.embedded) return body;
@@ -251,6 +286,38 @@ class _PlaylistCardState extends State<_PlaylistCard> {
 
 /// A single playlist page: its tracks, a play button, the visibility switch
 /// and removal for the owner.
+class _SmartChip extends StatelessWidget {
+  const _SmartChip({required this.list, required this.onTap});
+
+  final SmartList list;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: S.md, vertical: S.sm),
+        decoration: BoxDecoration(
+          border: Border.all(color: p.hairline),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.auto_awesome_rounded, size: 15, color: p.mute),
+            const SizedBox(width: S.xs),
+            Text(list.title, style: T.body(p.ink)),
+            const SizedBox(width: S.xs),
+            Text('${list.count}', style: T.micro(p.ash)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class PlaylistScreen extends StatefulWidget {
   const PlaylistScreen({
     super.key,
