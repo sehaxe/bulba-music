@@ -129,6 +129,17 @@ class _ArtistScreenState extends State<ArtistScreen> {
                             crossAxisAlignment: WrapCrossAlignment.center,
                             children: [
                               PillButton(
+                                icon: Icons.waves_rounded,
+                                label: 'радио',
+                                onTap: () async {
+                                  final list = await widget.api.artistRadio(
+                                    artist.id,
+                                  );
+                                  if (list.isEmpty) return;
+                                  widget.player.play(list.first, queue: list);
+                                },
+                              ),
+                              PillButton(
                                 icon: Icons.play_arrow_rounded,
                                 label: 'play',
                                 onTap: page.topTracks.isEmpty

@@ -21,6 +21,9 @@ pub const SKIP: i64 = 2;
 pub const PLAY_END: i64 = 4;
 /// Explicit "not this": stronger than a skip, because it is a decision.
 pub const REJECT: i64 = 5;
+/// "Not now": the track is fine, the hour is not. Distinct from a skip, which is
+/// silence, and from a rejection, which is a verdict.
+pub const LATER: i64 = 6;
 
 pub struct Taste {
     /// Best-match prototypes. Empty for a listener who has played nothing.
@@ -152,6 +155,12 @@ pub fn load(conn: &Connection, user: i64, vectors: &HashMap<i64, Vec<f32>>) -> R
                 let depth = 1.0 - ratio.clamp(0.0, 1.0);
                 *skip_cost.entry(*track).or_insert(0.0) += 0.2 + depth * 0.8;
                 first_outcome.entry(*track).or_insert((false, true)).1 = true;
+            }
+            LATER => {
+                // A small negative for this moment, and nothing more: the track
+                // must stay eligible tomorrow, which is the whole point of saying
+                // "not now" instead of "never".
+                *skip_cost.entry(*track).or_insert(0.0) += 0.15;
             }
             REJECT => {
                 played.insert(*track);

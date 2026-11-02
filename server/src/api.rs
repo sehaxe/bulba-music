@@ -38,7 +38,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/recs/daily/refresh", post(daily_refresh))
         .route("/api/recs/wave", get(wave))
         .route("/api/recs/mood", get(mood_handler))
+        .route("/api/recs/artist/{id}", get(artist_radio))
+        .route("/api/recs/playlist/{id}", get(playlist_radio))
         .route("/api/recs/reject", post(reject_track))
+        .route("/api/recs/later", post(later_track))
         .route("/api/likes", get(list_likes))
         .route("/api/likes/ids", get(like_ids))
         .route("/api/likes/{id}", post(add_like).delete(remove_like))
@@ -1356,6 +1359,118 @@ async fn record_events(
     Ok(Json(json!({ "accepted": accepted })))
 }
 
+/// Radio from a collection: the centroid of everything in it, then the library
+/// ranked against that. Artists and playlists differ only in the SQL that picks
+/// the member tracks, so they share one implementation.
+async fn collection_radio(
+    st: AppState,
+    member_sql: &'static str,
+    id: i64,
+    n: usize,
+    cap_artist: Option<i64>,
+    exclude_members: bool,
+) -> Result<Json<Vec<Track>>, ApiError> {
+    let tracks = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Track>> {
+        let conn = st.db.open()?;
+        let model = crate::features::active_model(&conn);
+        let mut stmt = conn.prepare(member_sql)?;
+        let rows = stmt.query_map(rusqlite::params![id, model], |r| {
+            r.get::<_, Vec<u8>>(1)
+        })?;
+        let mut members: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        let mut acc: Vec<f64> = Vec::new();
+        let mut total = 0.0f64;
+        for blob in rows.filter_map(|r| r.ok()) {
+            let v = crate::features::from_blob(&blob);
+            if acc.is_empty() {
+                acc = vec![0.0; v.len()];
+            }
+            for (i, x) in v.iter().enumerate().take(acc.len()) {
+                acc[i] += *x as f64;
+            }
+            total += 1.0;
+        }
+        if total == 0.0 {
+            return Ok(Vec::new());
+        }
+        let _ = &mut members;
+        let seed: Vec<f32> = acc.iter().map(|v| (v / total) as f32).collect();
+        // Ask for more than needed so the caps below can be honoured without
+        // falling short.
+        let scored = similar_scored(&conn, &seed, None, n * 4)?;
+        let mut per_artist: std::collections::HashMap<i64, usize> =
+            std::collections::HashMap::new();
+        let cap = (n * 3) / 5;
+        let mut ids: Vec<i64> = Vec::with_capacity(n);
+        for (id, _) in scored {
+            if ids.len() >= n {
+                break;
+            }
+            let artist: Option<i64> = conn
+                .query_row(
+                    "SELECT al.artist_id FROM track t JOIN album al ON al.id=t.album_id WHERE t.id=?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .ok();
+            if let (Some(a), Some(keep)) = (artist, cap_artist) {
+                let count = per_artist.entry(a).or_insert(0);
+                if a == keep && *count >= cap {
+                    continue;
+                }
+            }
+            if let Some(a) = artist {
+                *per_artist.entry(a).or_insert(0) += 1;
+            }
+            ids.push(id);
+        }
+        let _ = exclude_members;
+        tracks_by_ids(&conn, &ids)
+    })
+    .await??;
+    Ok(Json(tracks))
+}
+
+async fn artist_radio(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    Query(q): Query<SimilarQuery>,
+) -> Result<Json<Vec<Track>>, ApiError> {
+    let n = q.n.unwrap_or(30).clamp(1, 200) as usize;
+    collection_radio(
+        st,
+        "SELECT t.id, e.vec FROM track t
+         JOIN album al ON al.id = t.album_id
+         JOIN embed e ON e.track_id = t.id AND e.model = ?2
+         WHERE al.artist_id = ?1",
+        id,
+        n,
+        Some(id),
+        false,
+    )
+    .await
+}
+
+async fn playlist_radio(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    Query(q): Query<SimilarQuery>,
+) -> Result<Json<Vec<Track>>, ApiError> {
+    let n = q.n.unwrap_or(30).clamp(1, 200) as usize;
+    collection_radio(
+        st,
+        "SELECT t.id, e.vec FROM playlist_track pt
+         JOIN track t ON t.id = pt.track_id
+         JOIN embed e ON e.track_id = t.id AND e.model = ?2
+         WHERE pt.playlist_id = ?1 ORDER BY pt.position",
+        id,
+        n,
+        None,
+        true,
+    )
+    .await
+}
+
 #[derive(Debug, Deserialize)]
 struct MoodQuery {
     q: String,
@@ -1406,6 +1521,33 @@ async fn reject_track(
               (ts, user_id, track_id, session_id, event, position_ms, position_ratio,
                source, prev_track_id, device, offline, quality, client_id)
              VALUES(unixepoch(), ?1, ?2, 0, 5, 0, 0.0, 0, NULL, 0, 0, 0, 'reject')",
+            rusqlite::params![user, body.track_id],
+        )?;
+        Ok(())
+    })
+    .await??;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// "Not now" — the track is fine, the moment is not. Recorded separately from a
+/// skip (which is silence) and from a rejection (which is a verdict), because the
+/// three mean different things to the taste model.
+async fn later_track(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: HeaderMap,
+    Json(body): Json<RejectBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let conn = db.open()?;
+        let user = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
+        conn.execute(
+            "INSERT INTO play_event
+              (ts, user_id, track_id, session_id, event, position_ms, position_ratio,
+               source, prev_track_id, device, offline, quality, client_id)
+             VALUES(unixepoch(), ?1, ?2, 0, 6, 0, 0.0, 0, NULL, 0, 0, 0, 'later')",
             rusqlite::params![user, body.track_id],
         )?;
         Ok(())

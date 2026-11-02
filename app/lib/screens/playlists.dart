@@ -429,6 +429,16 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                 ),
               ),
               PillButton(
+                icon: Icons.waves_rounded,
+                label: 'радио',
+                onTap: () async {
+                  final list = await widget.api.playlistRadio(_pl.id);
+                  if (list.isEmpty) return;
+                  widget.player.play(list.first, queue: list);
+                },
+              ),
+              const SizedBox(width: S.sm),
+              PillButton(
                 icon: Icons.play_arrow_rounded,
                 label: 'play',
                 onTap: _tracks.isEmpty

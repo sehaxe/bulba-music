@@ -2,6 +2,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::HashSet;
+use std::collections::HashMap;
 
 /// Daily mixes are a product decision, not a query: a handful of named lists
 /// that stay the same for a day, each built from an explicit axis so the name
@@ -39,6 +40,10 @@ pub struct Feat {
 #[derive(Debug, Default, Clone)]
 pub struct Context {
     pub taste: Option<Vec<f32>>,
+    /// The listener's taste as separate prototypes, not one average. Each one
+    /// becomes its own mix, named after the artist it sounds most like — the
+    /// honest version of "your taste in five records".
+    pub prototypes: Vec<Vec<f32>>,
     /// Everything the listener has ever played.
     pub played: HashSet<i64>,
     pub liked: HashSet<i64>,
@@ -74,8 +79,16 @@ pub fn ensure(conn: &Connection, model: &str, user: i64) -> Result<()> {
     }
 
     let feats = load_features(conn, model)?;
-    let ctx = load_context(conn, user)?;
-    let mixes = build(&feats, &ctx, &day);
+    let mut ctx = load_context(conn, user)?;
+    let vectors: std::collections::HashMap<i64, Vec<f32>> = feats
+        .iter()
+        .map(|f| (f.id, f.vec.clone()))
+        .collect();
+    if let Ok(t) = crate::taste::load(conn, user, &vectors) {
+        ctx.prototypes = t.prototypes;
+    }
+    let artist_of = load_artist_names(conn)?;
+    let mixes = build(&feats, &ctx, &day, &artist_of);
 
     for mix in mixes {
         for (position, id) in mix.ids.iter().enumerate() {
@@ -158,6 +171,7 @@ fn load_context(conn: &Connection, user: i64) -> Result<Context> {
     };
     Ok(Context {
         taste: taste_vector(conn, user)?,
+        prototypes: Vec::new(),
         played,
         liked,
     })
@@ -287,7 +301,22 @@ fn recipes() -> Vec<Recipe> {
     ]
 }
 
-fn build(feats: &[Feat], ctx: &Context, day: &str) -> Vec<DailyMix> {
+fn load_artist_names(conn: &Connection) -> Result<std::collections::HashMap<i64, String>> {
+    let mut stmt = conn.prepare(
+        "SELECT t.id, ar.name FROM track t
+         JOIN album al ON al.id = t.album_id
+         JOIN artist ar ON ar.id = al.artist_id",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+fn build(
+    feats: &[Feat],
+    ctx: &Context,
+    day: &str,
+    artist_of: &std::collections::HashMap<i64, String>,
+) -> Vec<DailyMix> {
     if feats.is_empty() {
         return vec![];
     }
@@ -308,6 +337,50 @@ fn build(feats: &[Feat], ctx: &Context, day: &str) -> Vec<DailyMix> {
         .collect();
     let feats = &feats[..];
     let mut mixes: Vec<DailyMix> = Vec::new();
+
+    // One mix per taste prototype, named after what it sounds like. Slots start
+    // after the fixed recipes so the cached day keeps working.
+    for (i, proto) in ctx.prototypes.iter().take(3).enumerate() {
+        let mut scored: Vec<(f32, &Feat)> = feats
+            .iter()
+            .map(|f| (cos_to(proto, f), f))
+            .collect();
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        if scored.len() < 8 {
+            continue;
+        }
+        // Name the mix after the artist that dominates its first ten picks: the
+        // listener recognises the sound long before they would recognise a
+        // vector, and a name that is wrong is worse than a name that is plain.
+        let mut counts: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for (_, f) in scored.iter().take(10) {
+            if let Some(name) = artist_of.get(&f.id) {
+                *counts.entry(name.as_str()).or_insert(0) += 1;
+            }
+        }
+        let name = counts
+            .into_iter()
+            .max_by_key(|(_, n)| *n)
+            .map(|(n, _)| n.to_string())
+            .unwrap_or_else(|| "тебя".into());
+        // Two prototypes that both sound like the same band would produce two
+        // identically named mixes, which reads as a bug.
+        if mixes.iter().any(|m| m.title == format!("как {name}")) {
+            continue;
+        }
+        mixes.push(DailyMix {
+            slot: 20 + i as i64,
+            id: format!("proto-{i}"),
+            title: format!("как {}", name),
+            note: "твой вкус, собранный вокруг одного звучания".to_string(),
+            ids: scored
+                .iter()
+                .take(MAX_PER_MIX)
+                .map(|(_, f)| f.id)
+                .collect(),
+        });
+    }
 
     for (slot, recipe) in recipes().iter().enumerate() {
         let pool: Vec<&Feat> = feats
@@ -530,7 +603,7 @@ mod tests {
     fn calm_list_has_only_calm_tracks() {
         let feats = library();
         let ctx = Context::default();
-        let mixes = build(&feats, &ctx, "d1");
+        let mixes = build(&feats, &ctx, "d1", &HashMap::new());
         let calm = mixes.iter().find(|m| m.title == "спокойное").unwrap();
         for id in &calm.ids {
             let f = feats.iter().find(|f| f.id == *id).unwrap();
@@ -541,7 +614,7 @@ mod tests {
     #[test]
     fn energetic_list_excludes_quiet_tracks() {
         let feats = library();
-        let mixes = build(&feats, &Context::default(), "d1");
+        let mixes = build(&feats, &Context::default(), "d1", &HashMap::new());
         let loud = mixes.iter().find(|m| m.title == "энергичное").unwrap();
         for id in &loud.ids {
             let f = feats.iter().find(|f| f.id == *id).unwrap();
@@ -558,10 +631,11 @@ mod tests {
         }
         let ctx = Context {
             taste: Some(vec![0.0; crate::features::DIM]),
+            prototypes: Vec::new(),
             played: played.clone(),
             liked: HashSet::new(),
         };
-        let mixes = build(&feats, &ctx, "d1");
+        let mixes = build(&feats, &ctx, "d1", &HashMap::new());
         for m in &mixes {
             if m.title == "открытие" {
                 for id in &m.ids {
@@ -594,7 +668,7 @@ mod tests {
     #[test]
     fn tiny_library_gets_one_list() {
         let feats = vec![feat(1, 100.0, 0.1, 0.3, 0.0)];
-        let mixes = build(&feats, &Context::default(), "d1");
+        let mixes = build(&feats, &Context::default(), "d1", &HashMap::new());
         assert_eq!(mixes.len(), 1);
         assert_eq!(mixes[0].ids, vec![1]);
     }
@@ -602,8 +676,8 @@ mod tests {
     #[test]
     fn lists_are_stable_for_the_same_day() {
         let feats = library();
-        let a = build(&feats, &Context::default(), "d1");
-        let b = build(&feats, &Context::default(), "d1");
+        let a = build(&feats, &Context::default(), "d1", &HashMap::new());
+        let b = build(&feats, &Context::default(), "d1", &HashMap::new());
         for (x, y) in a.iter().zip(b.iter()) {
             assert_eq!(x.ids, y.ids);
         }

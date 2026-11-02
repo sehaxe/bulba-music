@@ -729,6 +729,19 @@ class Api {
     if (r.statusCode != 200) throw ApiException('reject → ${r.statusCode}');
   }
 
+  /// "Not now": the track stays eligible, it just loses this moment. Sent as its
+  /// own event so the model can tell it apart from a skip and from a rejection.
+  Future<void> notNow(int trackId) async {
+    final r = await _http
+        .post(
+          Uri.parse('$base/api/recs/later'),
+          headers: {'content-type': 'application/json'},
+          body: jsonEncode({'track_id': trackId}),
+        )
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) throw ApiException('later → ${r.statusCode}');
+  }
+
   /// Search by feeling: "грустный джаз на ночь". The server answers with the
   /// phrase it understood, so the UI can say what it heard instead of guessing.
   Future<MoodResult> mood(String query, {int limit = 30}) async {
@@ -747,6 +760,32 @@ class Api {
           .map((e) => Track.fromJson(e as Map<String, dynamic>))
           .toList(),
     );
+  }
+
+  /// Radio from a collection: the centroid of everything inside it, ranked
+  /// against the library. The same call answers for artists and playlists.
+  Future<List<Track>> artistRadio(int id, {int n = 30}) async {
+    final r = await _http
+        .get(Uri.parse('$base/api/recs/artist/$id?n=$n'))
+        .timeout(const Duration(seconds: 20));
+    if (r.statusCode != 200) {
+      throw ApiException('artist radio → ${r.statusCode}');
+    }
+    return (jsonDecode(r.body) as List<dynamic>)
+        .map((e) => Track.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<List<Track>> playlistRadio(int id, {int n = 30}) async {
+    final r = await _http
+        .get(Uri.parse('$base/api/recs/playlist/$id?n=$n'))
+        .timeout(const Duration(seconds: 20));
+    if (r.statusCode != 200) {
+      throw ApiException('playlist radio → ${r.statusCode}');
+    }
+    return (jsonDecode(r.body) as List<dynamic>)
+        .map((e) => Track.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   Future<Map<String, dynamic>> scan() async {

@@ -231,6 +231,15 @@ class _TrackSheetState extends State<_TrackSheet> {
                 },
               ),
             _Item(
+              icon: Icons.schedule_rounded,
+              label: 'не сейчас · в другой раз',
+              onTap: () async {
+                await widget.api.notNow(t.id);
+                if (context.mounted) Navigator.of(context).pop();
+                widget.player.next();
+              },
+            ),
+            _Item(
               icon: Icons.block_rounded,
               label: 'не это · больше не предлагать',
               onTap: () async {
