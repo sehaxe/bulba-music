@@ -7,6 +7,7 @@ import 'package:media_kit/media_kit.dart' show MediaKit;
 
 import 'api/client.dart';
 import 'design/tokens.dart';
+import 'player/background.dart';
 import 'player/controller.dart';
 import 'player/likes.dart';
 import 'screens/auth.dart';
@@ -80,6 +81,9 @@ class _BulbaAppState extends State<BulbaApp> {
     final savedServer = prefs.server;
     if (savedServer != null && savedServer.isNotEmpty) api.base = savedServer;
     player.setVolume(prefs.volume);
+    // Android suspends the process without a foreground service, so the audio
+    // dies with the window. Start it before anything can play.
+    await startBackgroundAudio(player, api);
     final skipOnboarding =
         const bool.fromEnvironment('SHOT_ONBOARD') ||
         Platform.environment['BULBA_SKIP_ONBOARDING'] == '1';
