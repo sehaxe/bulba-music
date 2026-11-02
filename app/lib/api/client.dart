@@ -127,6 +127,12 @@ class SearchArtist {
   );
 }
 
+class MoodResult {
+  const MoodResult({required this.phrase, required this.tracks});
+  final String? phrase;
+  final List<Track> tracks;
+}
+
 class SearchResults {
   const SearchResults({
     required this.tracks,
@@ -164,6 +170,8 @@ class StatsTotals {
     required this.likes,
     required this.skips,
     required this.repeats,
+    required this.skipRate,
+    required this.skipDepth,
   });
   final int plays;
   final double hours;
@@ -172,6 +180,8 @@ class StatsTotals {
   final int likes;
   final int skips;
   final int repeats;
+  final double skipRate;
+  final double skipDepth;
 
   factory StatsTotals.fromJson(Map<String, dynamic> j) => StatsTotals(
     plays: (j['plays'] ?? 0) as int,
@@ -181,6 +191,8 @@ class StatsTotals {
     likes: (j['likes'] ?? 0) as int,
     skips: (j['skips'] ?? 0) as int,
     repeats: (j['repeats'] ?? 0) as int,
+    skipRate: ((j['skip_rate'] ?? 0) as num).toDouble(),
+    skipDepth: ((j['skip_depth'] ?? 0) as num).toDouble(),
   );
 }
 
@@ -697,6 +709,39 @@ class Api {
     return (jsonDecode(r.body) as Map<String, dynamic>)['serve'] as String;
   }
 
+  /// "Не это": a decision, recorded as its own event so the wave excludes the
+  /// track instead of merely ranking it lower.
+  Future<void> reject(int trackId) async {
+    final r = await _http
+        .post(
+          Uri.parse('$base/api/recs/reject'),
+          headers: {'content-type': 'application/json'},
+          body: jsonEncode({'track_id': trackId}),
+        )
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) throw ApiException('reject → ${r.statusCode}');
+  }
+
+  /// Search by feeling: "грустный джаз на ночь". The server answers with the
+  /// phrase it understood, so the UI can say what it heard instead of guessing.
+  Future<MoodResult> mood(String query, {int limit = 30}) async {
+    final r = await _http
+        .get(
+          Uri.parse(
+            '$base/api/recs/mood?q=${Uri.encodeQueryComponent(query)}&limit=$limit',
+          ),
+        )
+        .timeout(const Duration(seconds: 12));
+    if (r.statusCode != 200) throw ApiException('mood → ${r.statusCode}');
+    final j = jsonDecode(r.body) as Map<String, dynamic>;
+    return MoodResult(
+      phrase: j['phrase'] as String?,
+      tracks: (j['tracks'] as List<dynamic>)
+          .map((e) => Track.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+
   Future<Map<String, dynamic>> scan() async {
     final r = await _http
         .post(Uri.parse('$base/api/scan'))
@@ -911,6 +956,16 @@ class Api {
         .delete(Uri.parse('$base/api/likes/$id'))
         .timeout(const Duration(seconds: 15));
     if (r.statusCode != 200) throw ApiException('unlike → ${r.statusCode}');
+  }
+
+  /// Ask for a different set of today's mixes. The cached ones are deleted
+  /// server-side, so this is a decision the listener makes, not a poll.
+  Future<int> refreshDaily() async {
+    final r = await _http
+        .post(Uri.parse('$base/api/recs/daily/refresh'))
+        .timeout(const Duration(seconds: 30));
+    if (r.statusCode != 200) throw ApiException('refresh → ${r.statusCode}');
+    return ((jsonDecode(r.body) as Map<String, dynamic>)['mixes'] ?? 0) as int;
   }
 
   Future<List<Mix>> dailyMixes() async {

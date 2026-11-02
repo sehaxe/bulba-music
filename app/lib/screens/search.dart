@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -38,11 +39,18 @@ class _SearchScreenState extends State<SearchScreen> {
   final FocusNode _focus = FocusNode();
   Timer? _debounce;
   SearchResults? _results;
+  MoodResult? _mood;
   bool _loading = false;
 
   @override
   void initState() {
     super.initState();
+    // `BULBA_SEARCH=чиптюн` types a query on launch: the mood block only shows
+    // when a sentence was understood, and that is worth a screenshot.
+    final q = Platform.environment['BULBA_SEARCH'];
+    if (q != null && q.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _searchFor(q));
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) => _focus.requestFocus());
   }
 
@@ -63,19 +71,68 @@ class _SearchScreenState extends State<SearchScreen> {
       });
       return;
     }
-    setState(() => _loading = true);
-    _debounce = Timer(const Duration(milliseconds: 180), () async {
+    setState(() {
+      _loading = true;
+      _mood = null;
+    });
+    _debounce = Timer(const Duration(milliseconds: 220), () async {
+      // Two questions at once: does a title match, and does the sentence mean
+      // anything? They are cheap and the second one is the interesting one.
+      final moodFuture = widget.api
+          .mood(value.trim(), limit: 12)
+          .catchError((_) => const MoodResult(phrase: null, tracks: []));
       try {
         final results = await widget.api.search(value.trim());
+        final mood = await moodFuture;
         if (!mounted || _query.text.trim() != value.trim()) return;
         setState(() {
           _results = results;
+          _mood = mood;
           _loading = false;
         });
       } catch (_) {
         if (mounted) setState(() => _loading = false);
       }
     });
+  }
+
+  Widget _moodSection(MoodResult mood) {
+    final p = Palette.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(S.xl, S.lg, S.xl, S.xs),
+          child: Row(
+            children: [
+              Icon(Icons.graphic_eq_rounded, size: 16, color: p.mute),
+              const SizedBox(width: S.sm),
+              Text('по звуку: «${mood.phrase}»', style: T.label(p.mute)),
+            ],
+          ),
+        ),
+        for (final t in mood.tracks)
+          TrackRow(
+            track: t,
+            coverUrl: widget.api.cover(t.albumId, t.hasCover, w: 128),
+            showCover: true,
+            playing: widget.player.current?.id == t.id,
+            liked: widget.likes.contains(t.id),
+            onLike: () => widget.likes.toggle(t),
+            onTap: () => widget.player.play(t, queue: mood.tracks),
+            onRadio: () => widget.onRadio(t),
+            onMenu: () => showTrackMenu(
+              context,
+              track: t,
+              api: widget.api,
+              player: widget.player,
+              likes: widget.likes,
+              onRadio: () => widget.onRadio(t),
+            ),
+          ),
+        Hr(color: p.hairline),
+      ],
+    );
   }
 
   void _searchFor(String text) {
@@ -166,17 +223,26 @@ class _SearchScreenState extends State<SearchScreen> {
       return Center(child: Text('searching…', style: T.label(p.mute)));
     }
     if (results == null || results.isEmpty) {
-      return Center(
-        child: Text(
-          'nothing for "${_query.text.trim()}"',
-          style: T.label(p.mute),
-        ),
+      // Text search failing does not mean the library has nothing: "грустный
+      // джаз на ночь" is a description, not a title.
+      return ListView(
+        padding: const EdgeInsets.only(bottom: S.xxl),
+        children: [
+          Center(
+            child: Text(
+              'nothing by name for "${_query.text.trim()}"',
+              style: T.label(p.mute),
+            ),
+          ),
+          if (_mood?.tracks.isNotEmpty ?? false) _moodSection(_mood!),
+        ],
       );
     }
 
     return ListView(
       padding: const EdgeInsets.only(bottom: S.xxl),
       children: [
+        if (_mood?.tracks.isNotEmpty ?? false) _moodSection(_mood!),
         if (results.artists.isNotEmpty) ...[
           _SectionHeader(label: 'artists', count: results.artists.length),
           Padding(

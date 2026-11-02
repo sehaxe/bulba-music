@@ -33,6 +33,12 @@ pub struct Totals {
     pub completions: i64,
     pub repeats: i64,
     pub skips: i64,
+    /// Share of starts that ended in a skip. The one number that says whether the
+    /// recommender is getting better.
+    pub skip_rate: f64,
+    /// How far into a track a skip happens, 0..1. Low means "wrong track",
+    /// high means "wrong moment".
+    pub skip_depth: f64,
     pub hours: f64,
     pub tracks: i64,
     pub artists: i64,
@@ -149,6 +155,19 @@ pub fn collect(
     let completions = count_of(3)?;
     let repeats = count_of(4)?;
     let skips = count_of(2)?;
+    // Depth is how far into a track people bail; the rate is skips over starts.
+    // Dividing skips by skips (the obvious SQL) reports 100% forever.
+    let skip_depth: f64 = conn.query_row(
+        "SELECT coalesce(avg(position_ratio),0) FROM play_event
+         WHERE user_id=?1 AND event=2",
+        [user],
+        |r| r.get(0),
+    )?;
+    let skip_rate = if plays > 0 {
+        skips as f64 / plays as f64
+    } else {
+        0.0
+    };
 
     // Hours are "how far into the track did this session get", not the sum of
     // progress ticks: a long track would otherwise be counted once per 15-second
@@ -312,6 +331,8 @@ pub fn collect(
             completions,
             repeats,
             skips,
+            skip_rate,
+            skip_depth,
             hours,
             tracks,
             artists,

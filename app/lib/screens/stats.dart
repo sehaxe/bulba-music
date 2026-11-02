@@ -143,8 +143,21 @@ class _StatsScreenState extends State<StatsScreen> {
             _Big(p: p, value: '${s.totals.tracks}', label: 'треков'),
             _Big(p: p, value: '${s.totals.likes}', label: 'лайков'),
             _Big(p: p, value: '${s.daysPlayed}', label: 'дней'),
+            _Big(
+              p: p,
+              value: '${(s.totals.skipRate * 100).round()}%',
+              label: 'скипов',
+            ),
           ],
         ),
+        if (s.totals.skips > 0) ...[
+          const SizedBox(height: S.sm),
+          Text(
+            'в среднем уходишь на ${(s.totals.skipDepth * 100).round()}% трека — '
+            '${s.totals.skipDepth < 0.25 ? 'значит, не тот трек' : 'значит, не тот момент'}',
+            style: T.micro(p.ash),
+          ),
+        ],
         if (s.longestStreak > 1) ...[
           const SizedBox(height: S.md),
           Text(

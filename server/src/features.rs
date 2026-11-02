@@ -10,6 +10,29 @@ use std::process::Command;
 /// Layout: 40 log-mel bands, 12 chroma bins, 3 spectral shape stats, 1 tempo.
 /// The vector is L2-normalised, so similarity is a dot product.
 pub const MODEL: &str = "dsp-v1";
+
+/// Which descriptor the recommender should read.
+///
+/// The trained model (`clap-v1`) is written by `tools/embed_clap.py`; the hand
+/// built one stays as the fallback so a fresh checkout, or a library that was
+/// never embedded, still recommends something instead of nothing. The switch is
+/// coverage, not a flag: a model that has seen half the library wins.
+pub fn active_model(conn: &rusqlite::Connection) -> String {
+    let total: i64 = conn
+        .query_row("SELECT count(*) FROM track", [], |r| r.get(0))
+        .unwrap_or(0);
+    if total > 0 {
+        for model in ["clap-v1", MODEL] {
+            let n: i64 = conn
+                .query_row("SELECT count(*) FROM embed WHERE model=?1", [model], |r| r.get(0))
+                .unwrap_or(0);
+            if n * 2 >= total {
+                return model.to_string();
+            }
+        }
+    }
+    MODEL.to_string()
+}
 pub const DIM: usize = 56;
 
 const SAMPLE_RATE: u32 = 22050;

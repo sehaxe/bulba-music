@@ -35,3 +35,7 @@ incoming/
 # build artefacts
 /dist/
 /app/build/
+
+# embedding pipeline (models and venv are re-created by tools/embed_clap.py)
+tools/venv/
+tools/models/

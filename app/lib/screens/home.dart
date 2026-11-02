@@ -338,6 +338,16 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 IconButton(
+                  tooltip: 'пересобрать подборки',
+                  onPressed: () async {
+                    try {
+                      await widget.api.refreshDaily();
+                      await _loadMixes();
+                    } catch (_) {}
+                  },
+                  icon: Icon(Icons.autorenew_rounded, size: 20, color: p.mute),
+                ),
+                IconButton(
                   tooltip: 'rescan library',
                   onPressed: () async {
                     await widget.onRescan();

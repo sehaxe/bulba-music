@@ -35,7 +35,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/recs/similar/{id}", get(similar))
         .route("/api/recs/home", get(home_mixes))
         .route("/api/recs/daily", get(daily_mixes))
+        .route("/api/recs/daily/refresh", post(daily_refresh))
         .route("/api/recs/wave", get(wave))
+        .route("/api/recs/mood", get(mood_handler))
+        .route("/api/recs/reject", post(reject_track))
         .route("/api/likes", get(list_likes))
         .route("/api/likes/ids", get(like_ids))
         .route("/api/likes/{id}", post(add_like).delete(remove_like))
@@ -1173,8 +1176,9 @@ async fn info(
         let artists: i64 = conn.query_row("SELECT count(*) FROM artist", [], |r| r.get(0))?;
         let bytes: i64 = conn.query_row("SELECT coalesce(sum(bytes),0) FROM master", [], |r| r.get(0))?;
         let serve = crate::serve::get(&conn).tag().to_string();
-        let embedded: i64 =
-            conn.query_row("SELECT count(*) FROM embed WHERE model=?1", [crate::features::MODEL], |r| r.get(0))?;
+        let active = crate::features::active_model(&conn);
+        let embedded: i64 = conn
+            .query_row("SELECT count(*) FROM embed WHERE model=?1", [&active], |r| r.get(0))?;
         let lossless: i64 = conn.query_row(
             "SELECT count(*) FROM v_track WHERE codec IN ('flac','alac','wav','aiff')",
             [],
@@ -1189,6 +1193,7 @@ async fn info(
             "lossless": lossless,
             "embedded": embedded,
             "serve": serve,
+            "embedding_model": active,
             "rev": rev,
         }))
     })
@@ -1342,6 +1347,64 @@ async fn record_events(
 }
 
 #[derive(Debug, Deserialize)]
+struct MoodQuery {
+    q: String,
+    limit: Option<usize>,
+}
+
+/// "Что-то вроде грустного джаза на ночь" — a query that is not a title.
+async fn mood_handler(
+    State(st): State<AppState>,
+    Query(q): Query<MoodQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    let limit = q.limit.unwrap_or(30).clamp(1, 200);
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+        let conn = db.open()?;
+        let Some((phrase, vec)) = crate::mood::match_phrase(&conn, &q.q)? else {
+            return Ok(json!({ "phrase": null, "tracks": [] }));
+        };
+        let scored = similar_scored(&conn, &vec, None, limit)?;
+        let ids: Vec<i64> = scored.iter().map(|(id, _)| *id).collect();
+        let tracks = tracks_by_ids(&conn, &ids)?;
+        Ok(json!({ "phrase": phrase, "tracks": tracks }))
+    })
+    .await??;
+    Ok(Json(out))
+}
+
+#[derive(Debug, Deserialize)]
+struct RejectBody {
+    track_id: i64,
+}
+
+/// "Не это" is a decision, not a skip: recorded as its own event so the wave can
+/// exclude it outright instead of merely penalising it.
+async fn reject_track(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: HeaderMap,
+    Json(body): Json<RejectBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let conn = db.open()?;
+        let user = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
+        conn.execute(
+            "INSERT INTO play_event
+              (ts, user_id, track_id, session_id, event, position_ms, position_ratio,
+               source, prev_track_id, device, offline, quality, client_id)
+             VALUES(unixepoch(), ?1, ?2, 0, 5, 0, 0.0, 0, NULL, 0, 0, 0, 'reject')",
+            rusqlite::params![user, body.track_id],
+        )?;
+        Ok(())
+    })
+    .await??;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Debug, Deserialize)]
 struct BuildQuery {
     limit: Option<i64>,
     loudness: Option<bool>,
@@ -1359,6 +1422,7 @@ async fn build_features(
     let loudness_only = q.loudness.unwrap_or(false);
     let stats = tokio::task::spawn_blocking(move || -> anyhow::Result<(usize, i64)> {
         let conn = db.open()?;
+        let features_model = crate::features::active_model(&conn);
         let rows: Vec<(i64, String)> = {
             // `?loudness=1` is a different pass: loudness was added after the
             // library had already been embedded, and re-decoding every file for
@@ -1384,7 +1448,7 @@ async fn build_features(
                  LIMIT ?2"
             };
             let mut stmt = conn.prepare(sql)?;
-            stmt.query_map(rusqlite::params![crate::features::MODEL, limit], |r| {
+            stmt.query_map(rusqlite::params![features_model, limit], |r| {
                 Ok((r.get(0)?, r.get(1)?))
             })?
             .filter_map(|r| r.ok())
@@ -1499,10 +1563,11 @@ fn query_tracks(conn: &rusqlite::Connection, sql: &str, params: &[&dyn rusqlite:
 }
 
 fn seed_vector(conn: &rusqlite::Connection, id: i64) -> anyhow::Result<Option<Vec<f32>>> {
+    let model = crate::features::active_model(conn);
     let blob: Option<Vec<u8>> = conn
         .query_row(
             "SELECT vec FROM embed WHERE track_id=?1 AND model=?2",
-            rusqlite::params![id, crate::features::MODEL],
+            rusqlite::params![id, model],
             |r| r.get(0),
         )
         .ok();
@@ -1518,9 +1583,10 @@ fn similar_scored(
     let mut stmt = conn.prepare(
         "SELECT track_id, vec FROM embed WHERE model=?1 AND (?2 IS NULL OR track_id<>?2)",
     )?;
+    let model = crate::features::active_model(conn);
     let mut scored: Vec<(i64, f32)> = stmt
         .query_map(
-            rusqlite::params![crate::features::MODEL, exclude],
+            rusqlite::params![model, exclude],
             |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)),
         )?
         .filter_map(|r| r.ok())
@@ -1683,6 +1749,35 @@ async fn home_mixes(
 }
 
 /// Four numbered playlists, stable for the day.
+/// Rebuild today's mixes. The mixes are cached for a day on purpose — a list
+/// that changes under you is not a mix — so this is the one way to ask for a
+/// different day.
+async fn daily_refresh(
+    State(st): State<AppState>,
+    caller: Caller,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    let n = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+        let conn = db.open()?;
+        let me = user_from(&headers, &conn, caller.local)?
+            .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
+        let day = crate::daily::day_key();
+        conn.execute(
+            "DELETE FROM daily_mix WHERE day=?1 AND user_id=?2",
+            rusqlite::params![day, me],
+        )?;
+        crate::daily::ensure(&conn, &crate::features::active_model(&conn), me)?;
+        Ok(conn.query_row(
+            "SELECT count(DISTINCT slot) FROM daily_mix WHERE day=?1 AND user_id=?2",
+            rusqlite::params![day, me],
+            |r| r.get::<_, i64>(0),
+        )? as usize)
+    })
+    .await??;
+    Ok(Json(json!({ "mixes": n })))
+}
+
 async fn daily_mixes(
     State(st): State<AppState>,
     caller: Caller,
@@ -1693,7 +1788,7 @@ async fn daily_mixes(
         let conn = db.open()?;
         let me = user_from(&headers, &conn, caller.local)?
             .ok_or_else(|| anyhow::anyhow!(UNAUTHORIZED))?;
-        crate::daily::ensure(&conn, crate::features::MODEL, me)?;
+        crate::daily::ensure(&conn, &crate::features::active_model(&conn), me)?;
         let rows = crate::daily::load(&conn, me)?;
         let mut out = Vec::with_capacity(rows.len());
         for m in rows {
@@ -1937,10 +2032,11 @@ async fn similar(
     let tracks = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Track>> {
         let conn = st.db.open()?;
 
+        let model = crate::features::active_model(&conn);
         let seed = conn
             .query_row(
                 "SELECT vec FROM embed WHERE track_id=?1 AND model=?2",
-                rusqlite::params![id, crate::features::MODEL],
+                rusqlite::params![id, model],
                 |r| r.get::<_, Vec<u8>>(0),
             )
             .ok();

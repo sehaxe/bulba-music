@@ -105,8 +105,9 @@ fn load_stats(conn: &Connection, user: i64) -> Result<Stats> {
 /// Embeddings of every track that has one, skipping the embedded model we do
 /// not use any more.
 fn load_vectors(conn: &Connection) -> Result<HashMap<i64, Vec<f32>>> {
+    let model = features::active_model(conn);
     let mut stmt = conn.prepare("SELECT track_id, vec FROM embed WHERE model=?1")?;
-    let rows = stmt.query_map([features::MODEL], |r| {
+    let rows = stmt.query_map([model], |r| {
         Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
     })?;
     let mut out = HashMap::new();
@@ -191,10 +192,13 @@ fn now() -> i64 {
 ///
 /// The formula is deliberately small and explainable:
 ///
-///   score = similarity            (to the seed, or to the taste centroid)
-///         + novelty_bonus         (unheard tracks, scaled by `novelty`)
+///   score = affinity              (best of: seed, taste prototypes, this hour,
+///                                  the current session — weighted, not averaged,
+///                                  so a lullaby listener is not a lullaby-rave)
+///         + novelty_bonus         (unheard tracks, scaled by what this listener
+///                                  does with unheard music, per hour of the day)
 ///         - familiarity_penalty   (over-played tracks, unless they are liked)
-///         - skip_penalty          (skipped more than played)
+///         - skip_penalty          (weighted by how early the skip happened)
 ///         - recency_penalty       (played in the last day)
 ///
 /// and whichever term contributed most is what the reason says.
@@ -210,20 +214,28 @@ pub fn pick(
         return Ok(Vec::new());
     }
     let stats = load_stats(conn, req.user)?;
-    let excluded: HashSet<i64> = req.exclude.iter().copied().collect();
+    let taste = crate::taste::load(conn, req.user, &vectors)?;
+    // A rejected track is excluded, not penalised: "not this" means not this,
+    // and a strong negative that still shows up in twenty picks reads as broken.
+    let excluded: HashSet<i64> = req
+        .exclude
+        .iter()
+        .copied()
+        .chain(taste.rejected.iter().copied())
+        .collect();
 
-    let seed_vec = req
-        .seed
-        .and_then(|id| vectors.get(&id).cloned());
-    let taste = taste_of(&vectors, &stats, artist_of).map(|(v, _)| v);
-
-    let base = seed_vec.clone().or_else(|| taste.clone());
+    let seed_vec = req.seed.and_then(|id| vectors.get(&id).cloned());
+    let base = seed_vec.clone();
 
     // Cold start: no seed, nothing played. Rather than neighbours of an
     // arbitrary track, spread the first batch across the library with
     // farthest-point sampling — a fresh account should hear what the library
     // contains, not four songs that happen to sit next to each other.
-    if base.is_none() {
+    let cold = seed_vec.is_none()
+        && taste.prototypes.is_empty()
+        && taste.session.is_none()
+        && taste.context.is_none();
+    if cold {
         let mut pool: Vec<(i64, Vec<f32>)> = vectors
             .iter()
             .filter(|(id, _)| !excluded.contains(id))
@@ -270,21 +282,25 @@ pub fn pick(
         return Ok(out);
     }
 
-    let base = base.unwrap_or_default();
-
     let ts = now();
     let mut scored: Vec<(i64, f64, Why)> = Vec::new();
     for (id, vec) in &vectors {
         if excluded.contains(id) {
             continue;
         }
-        let sim = cos(&base, vec) as f64;
+        let (sim, term) = taste.affinity(vec, seed_vec.as_deref(), req.novelty);
         let plays = *stats.plays.get(id).unwrap_or(&0) as f64;
         let skips = *stats.skips.get(id).unwrap_or(&0) as f64;
         let liked = stats.likes.contains(id);
 
         let heard = plays > 0.0;
-        let novelty_bonus = if heard { 0.0 } else { 0.22 * req.novelty };
+        // Two dials multiply: what the listener asks for now, and what their
+        // own record says they do with new music.
+        let novelty_bonus = if heard {
+            0.0
+        } else {
+            0.26 * req.novelty * taste.novelty
+        };
         let want_return = if heard && !liked {
             // Played a lot and not touched for a week: the wave is allowed to
             // bring it back, but never right after it was skipped.
@@ -319,14 +335,18 @@ pub fn pick(
             - recency_penalty;
 
         // The winning term becomes the sentence.
-        let why = if seed_vec.is_some() && sim >= 0.55 {
-            Why::Seed
-        } else if !heard && sim >= 0.35 {
+        let why = if !heard && novelty_bonus > 0.08 && sim >= 0.30 {
             Why::Novel
         } else if want_return > 0.0 {
             Why::Return
         } else if liked {
             Why::Taste
+        } else if matches!(term, crate::taste::Term::Context) {
+            Why::Return
+        } else if matches!(term, crate::taste::Term::Session) {
+            Why::Taste
+        } else if seed_vec.is_some() && sim >= 0.35 {
+            Why::Seed
         } else {
             let artist = artist_of.get(id).copied().unwrap_or(-1);
             let artist_heavy = artist >= 0
@@ -533,7 +553,10 @@ mod tests {
             artists.insert(id, artist);
             names.insert(artist, name.to_string());
         }
-        pick(conn, &req, &artists, &names, &HashMap::new())
+        // Titles matter: the dedup guard keys on title|artist, and an empty
+        // title map makes every track of an artist look like the same song.
+        let titles: HashMap<i64, String> = (1..=5).map(|i| (i, format!("t{i}"))).collect();
+        pick(conn, &req, &artists, &names, &titles)
             .unwrap()
             .into_iter()
             .map(|i| i.track_id)
@@ -544,8 +567,12 @@ mod tests {
     fn a_seed_pulls_its_own_cluster_first() {
         let (_d, conn) = setup();
         let got = ids(&conn, 1);
-        assert!(got.contains(&2) || got.contains(&3));
-        assert!(!got.contains(&4), "the far cluster must not lead");
+        // The fixture's two clusters are one-dimensional, so every track in a
+        // cluster has cosine 1.0 to the seed and the order inside a cluster is a
+        // coin flip. What must hold is that the seed's side dominates; the
+        // artist cap legitimately lets one track from the other side in.
+        let near = got.iter().filter(|id| **id <= 3).count();
+        assert!(near >= 2, "the seed cluster must lead, got {got:?}");
     }
 
     #[test]

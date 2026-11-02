@@ -231,6 +231,14 @@ class _TrackSheetState extends State<_TrackSheet> {
                 },
               ),
             _Item(
+              icon: Icons.block_rounded,
+              label: 'не это · больше не предлагать',
+              onTap: () async {
+                await widget.api.reject(t.id);
+                if (context.mounted) Navigator.of(context).pop();
+              },
+            ),
+            _Item(
               icon: Icons.info_outline_rounded,
               label: 'подробнее',
               onTap: () {
