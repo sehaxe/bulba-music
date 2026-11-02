@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../api/client.dart';
+import '../cast/cast_sheet.dart';
+import '../cast/cast_store.dart';
 import '../design/accent.dart';
 import '../design/components.dart';
 import '../design/tokens.dart';
@@ -20,11 +22,13 @@ class PlayerScreen extends StatelessWidget {
     required this.player,
     required this.api,
     required this.likes,
+    required this.cast,
     required this.onRadio,
   });
   final PlayerController player;
   final Api api;
   final LikesStore likes;
+  final CastStore cast;
   final void Function(Track) onRadio;
 
   @override
@@ -69,6 +73,7 @@ class PlayerScreen extends StatelessWidget {
                           player: player,
                           api: api,
                           likes: likes,
+                          cast: cast,
                           p: p,
                           track: t,
                           onRadio: onRadio,
@@ -341,6 +346,7 @@ class _TopBar extends StatelessWidget {
     required this.player,
     required this.api,
     required this.likes,
+    required this.cast,
     required this.p,
     required this.track,
     required this.onRadio,
@@ -349,6 +355,7 @@ class _TopBar extends StatelessWidget {
   final PlayerController player;
   final Api api;
   final LikesStore likes;
+  final CastStore cast;
   final Palette p;
   final Track track;
   final void Function(Track) onRadio;
@@ -364,7 +371,15 @@ class _TopBar extends StatelessWidget {
             onPressed: () => Navigator.of(context).maybePop(),
           ),
           const Spacer(),
-          const Spacer(),
+          IconButton(
+            tooltip: 'играть на устройстве',
+            icon: Icon(
+              cast.active ? Icons.cast_connected_rounded : Icons.cast_rounded,
+              color: p.onRoom,
+            ),
+            onPressed: () =>
+                showCastSheet(context, api: api, player: player, cast: cast),
+          ),
           IconButton(
             icon: Icon(Icons.more_vert_rounded, color: p.onRoom),
             onPressed: () =>

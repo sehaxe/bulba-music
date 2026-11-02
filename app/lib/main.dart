@@ -7,6 +7,7 @@ import 'package:media_kit/media_kit.dart' show MediaKit;
 import 'package:path_provider/path_provider.dart';
 
 import 'api/client.dart';
+import 'cast/cast_store.dart';
 import 'design/tokens.dart';
 import 'player/background.dart';
 import 'player/controller.dart';
@@ -61,6 +62,7 @@ class _BulbaAppState extends State<BulbaApp> {
     ),
   );
   late final PlayerController player = PlayerController(api);
+  late final CastStore cast = CastStore(api: api, player: player);
   late final Downloads downloads = Downloads(api);
   late final LikesStore likes = LikesStore(api);
   Prefs? _prefs;
@@ -229,6 +231,7 @@ class _BulbaAppState extends State<BulbaApp> {
                     prefs: _prefs!,
                     themeMode: themeMode,
                     downloads: downloads,
+                    cast: cast,
                   ),
           ),
         ),

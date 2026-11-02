@@ -483,7 +483,59 @@ pub fn pick(
         // keep the enum used, so the compiler notices if a case is dropped
         debug_assert!(!why.code().is_empty());
     }
-    Ok(out)
+    Ok(harmonic_walk(conn, out))
+}
+
+/// Reorder a batch so consecutive tracks can actually blend.
+///
+/// Relevance is already decided — every track in the batch earned its place —
+/// so this only decides the order. A greedy walk keeps the best pick first and
+/// then prefers the closest key on the wheel, falling back to score when nothing
+/// blends. A wave that jumps from 8A to 3A at every track is a playlist; a walk
+/// around the wheel is a set.
+fn harmonic_walk(conn: &Connection, picks: Vec<WaveItem>) -> Vec<WaveItem> {
+    if picks.len() < 3 {
+        return picks;
+    }
+    let mut key: HashMap<i64, String> = HashMap::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT track_id, camelot FROM track_key") {
+        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))) {
+            for row in rows.flatten() {
+                key.insert(row.0, row.1);
+            }
+        }
+    }
+    if key.is_empty() {
+        return picks;
+    }
+    let mut left = picks;
+    left.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    let mut out: Vec<WaveItem> = Vec::with_capacity(left.len());
+    out.push(left.remove(0));
+    while !left.is_empty() {
+        let last = out.last().and_then(|i| key.get(&i.track_id)).cloned();
+        let mut best = 0usize;
+        let mut best_cost = f64::MAX;
+        for (i, item) in left.iter().enumerate() {
+            let next = key.get(&item.track_id);
+            // A track with no key costs a little; a clash costs a lot; a good
+            // neighbour costs nothing and wins ties by score.
+            let cost = match (&last, next) {
+                (Some(a), Some(b)) => match crate::keys::compatibility(a, b) {
+                    0 => 0.0,
+                    1 => 1.0,
+                    _ => 3.0,
+                },
+                _ => 1.5,
+            } - item.score.min(1.0) * 0.35;
+            if cost < best_cost {
+                best_cost = cost;
+                best = i;
+            }
+        }
+        out.push(left.remove(best));
+    }
+    out
 }
 
 #[cfg(test)]

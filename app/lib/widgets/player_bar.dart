@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
+import '../cast/cast_sheet.dart';
+import '../cast/cast_store.dart';
 import '../design/components.dart';
 import '../design/tokens.dart';
 import '../player/controller.dart';
@@ -17,6 +19,7 @@ class PlayerBar extends StatelessWidget {
     required this.likes,
     required this.onOpen,
     this.accent,
+    this.cast,
     this.height = 64,
     this.showVolume = false,
   });
@@ -28,6 +31,10 @@ class PlayerBar extends StatelessWidget {
   final LikesStore likes;
   final VoidCallback onOpen;
   final Color? accent;
+
+  /// Optional: where the cast sheet comes from. Absent on screens that have no
+  /// other player.
+  final CastStore? cast;
   final double height;
   final bool showVolume;
 
@@ -116,7 +123,7 @@ class PlayerBar extends StatelessWidget {
                   }
                   return Padding(
                     padding: const EdgeInsets.symmetric(horizontal: S.md),
-                    child: _wideRow(p, t, accent),
+                    child: _wideRow(context, p, t, accent),
                   );
                 },
               ),
@@ -129,7 +136,7 @@ class PlayerBar extends StatelessWidget {
 }
 
 extension on PlayerBar {
-  Widget _wideRow(Palette p, Track t, Color accent) {
+  Widget _wideRow(BuildContext context, Palette p, Track t, Color accent) {
     return Stack(
       alignment: Alignment.center,
       children: [
@@ -174,6 +181,29 @@ extension on PlayerBar {
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (cast != null)
+              Padding(
+                padding: const EdgeInsets.only(right: S.xs),
+                child: IconButton(
+                  visualDensity: VisualDensity.compact,
+                  tooltip: cast!.active
+                      ? 'играет на ${cast!.device?.name}'
+                      : 'играть на устройстве',
+                  onPressed: () => showCastSheet(
+                    context,
+                    api: api,
+                    player: player,
+                    cast: cast!,
+                  ),
+                  icon: Icon(
+                    cast!.active
+                        ? Icons.cast_connected_rounded
+                        : Icons.cast_rounded,
+                    size: 20,
+                    color: cast!.active ? accent : p.mute,
+                  ),
+                ),
+              ),
             _CircleButton(
               icon: Icons.skip_previous_rounded,
               onTap: player.previous,

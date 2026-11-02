@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'api/client.dart';
+import 'cast/cast_sheet.dart';
+import 'cast/cast_store.dart';
 import 'design/accent.dart';
 import 'design/components.dart';
 import 'design/tokens.dart';
@@ -36,12 +38,14 @@ class Shell extends StatefulWidget {
     required this.likes,
     required this.prefs,
     required this.downloads,
+    required this.cast,
   });
   final Api api;
   final PlayerController player;
   final LikesStore likes;
   final Prefs prefs;
   final Downloads downloads;
+  final CastStore cast;
   final ValueNotifier<ThemeMode> themeMode;
 
   @override
@@ -120,6 +124,19 @@ class _ShellState extends State<Shell> {
   @override
   void initState() {
     super.initState();
+    // `BULBA_CAST=1` opens the cast sheet on launch: discovery is the part that
+    // cannot be unit-tested, and a screenshot of a device list is the only
+    // evidence a desk can produce.
+    if (Platform.environment['BULBA_CAST'] == '1') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        showCastSheet(
+          context,
+          api: widget.api,
+          player: widget.player,
+          cast: widget.cast,
+        );
+      });
+    }
     widget.player.addListener(_onPlayer);
     _load();
     widget.likes.load();
@@ -306,6 +323,7 @@ class _ShellState extends State<Shell> {
                 player: widget.player,
                 api: widget.api,
                 likes: widget.likes,
+                cast: widget.cast,
                 onRadio: _startRadio,
               ),
             ),
@@ -469,6 +487,7 @@ class _ShellState extends State<Shell> {
                   likes: widget.likes,
                   onOpen: _openPlayer,
                   accent: _accent,
+                  cast: widget.cast,
                   height: wide ? 68 : 60,
                   showVolume: wide,
                 ),
