@@ -135,7 +135,11 @@ class CollectionView extends StatelessWidget {
                   track: tracks[i],
                   index: i + 1,
                   playing: player.current?.id == tracks[i].id,
-                  coverUrl: api.cover(tracks[i].albumId, tracks[i].hasCover),
+                  coverUrl: api.cover(
+                    tracks[i].albumId,
+                    tracks[i].hasCover,
+                    w: 128,
+                  ),
                   onTap: () => player.play(tracks[i], queue: tracks),
                   onRadio: () => onRadio(tracks[i]),
                   onMenu: () => showTrackMenu(

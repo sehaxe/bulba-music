@@ -42,7 +42,7 @@ class PlayerScreen extends StatelessWidget {
         final art = wide
             ? 340.0
             : (size.width - 56).clamp(180.0, size.height - 330).toDouble();
-        final coverUrl = api.cover(t.albumId, t.hasCover);
+        final coverUrl = api.cover(t.albumId, t.hasCover, w: 768);
 
         return Scaffold(
           backgroundColor: p.room,

@@ -37,7 +37,7 @@ class _DailyCardState extends State<DailyCard> {
     final p = Palette.of(context);
     final covers = <String?>[];
     for (final t in widget.mix.tracks) {
-      final url = widget.api.cover(t.albumId, t.hasCover);
+      final url = widget.api.cover(t.albumId, t.hasCover, w: 128);
       if (url != null && !covers.contains(url)) covers.add(url);
       if (covers.length == 4) break;
     }
@@ -312,7 +312,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       title: t.title,
                       artist: t.artist,
                       plays: t.plays,
-                      coverUrl: widget.api.cover(t.albumId, t.hasCover),
+                      coverUrl: widget.api.cover(t.albumId, t.hasCover, w: 128),
                       onPlay: () =>
                           widget.player.play(tracks[i], queue: tracks),
                       onRadio: () => widget.onRadio(tracks[i]),
@@ -324,7 +324,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     title: t.title,
                     artist: t.artist,
                     plays: 0,
-                    coverUrl: widget.api.cover(t.albumId, t.hasCover),
+                    coverUrl: widget.api.cover(t.albumId, t.hasCover, w: 128),
                     onPlay: () => widget.player.play(t, queue: _recent),
                     onRadio: () => widget.onRadio(t),
                   );
@@ -375,7 +375,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   onOpen: () {
                     final covers = <String?>[];
                     for (final t in mix.tracks) {
-                      final url = widget.api.cover(t.albumId, t.hasCover);
+                      final url = widget.api.cover(
+                        t.albumId,
+                        t.hasCover,
+                        w: 128,
+                      );
                       if (url != null && !covers.contains(url)) {
                         covers.add(url);
                       }
@@ -459,7 +463,11 @@ class _HomeScreenState extends State<HomeScreen> {
                           ClipRRect(
                             borderRadius: BorderRadius.circular(10),
                             child: CoverArt(
-                              url: widget.api.cover(album.id, album.hasCover),
+                              url: widget.api.cover(
+                                album.id,
+                                album.hasCover,
+                                w: 320,
+                              ),
                               size: 150,
                               radius: 10,
                               animate: false,

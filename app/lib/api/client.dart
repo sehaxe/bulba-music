@@ -850,8 +850,13 @@ class Api {
     return list;
   }
 
-  String? cover(int? albumId, bool hasCover) =>
-      hasCover && albumId != null ? '$base/api/albums/$albumId/cover' : null;
+  /// Cover URL at a given pixel width. The server renders and caches one file
+  /// per width, so a 64 px row thumbnail must not pull the 512 px artwork: the
+  /// difference is ~8 KB against ~120 KB, and a home screen shows dozens.
+  String? cover(int? albumId, bool hasCover, {int w = 512}) =>
+      hasCover && albumId != null
+      ? '$base/api/albums/$albumId/cover?w=$w'
+      : null;
 }
 
 /// A view over tracks that share an album. The catalogue has albums as rows on

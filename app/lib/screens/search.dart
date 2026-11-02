@@ -221,7 +221,7 @@ class _SearchScreenState extends State<SearchScreen> {
                             if (a.year != null) '${a.year}',
                           ].where((e) => e.isNotEmpty).join(' · '),
                           tracks: tracks,
-                          coverUrl: widget.api.cover(a.id, a.hasCover),
+                          coverUrl: widget.api.cover(a.id, a.hasCover, w: 128),
                         ),
                       );
                     },
@@ -229,7 +229,7 @@ class _SearchScreenState extends State<SearchScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         CoverArt(
-                          url: widget.api.cover(a.id, a.hasCover),
+                          url: widget.api.cover(a.id, a.hasCover, w: 320),
                           size: 148,
                           radius: 10,
                         ),

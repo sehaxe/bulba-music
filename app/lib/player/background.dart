@@ -38,7 +38,7 @@ class BulbaAudioHandler extends BaseAudioHandler with QueueHandler {
           duration: t.durationMs == null
               ? null
               : Duration(milliseconds: t.durationMs!),
-          artUri: switch (api.cover(t.albumId, t.hasCover)) {
+          artUri: switch (api.cover(t.albumId, t.hasCover, w: 512)) {
             final String url => Uri.parse(url),
             _ => null,
           },

@@ -65,7 +65,7 @@ class RadioScreen extends StatelessWidget {
                       track: t,
                       index: i + 1,
                       playing: player.current?.id == t.id,
-                      coverUrl: api.cover(t.albumId, t.hasCover),
+                      coverUrl: api.cover(t.albumId, t.hasCover, w: 128),
                       onTap: () => player.play(t, queue: queue),
                       onRadio: () => onRadio(t),
                     );

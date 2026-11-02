@@ -310,7 +310,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         key: ValueKey('artist-${item.id}'),
         coverUrl: item.coverAlbum == null
             ? null
-            : widget.api.cover(item.coverAlbum!, item.hasCover),
+            : widget.api.cover(item.coverAlbum!, item.hasCover, w: 128),
         title: item.name,
         subtitle:
             '${item.albums} ${plural(item.albums, one: 'альбом', few: 'альбома', many: 'альбомов')} · '
@@ -322,7 +322,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     if (item is AlbumSummary) {
       return _IndexRow(
         key: ValueKey('album-${item.id}'),
-        coverUrl: widget.api.cover(item.id, item.hasCover),
+        coverUrl: widget.api.cover(item.id, item.hasCover, w: 128),
         title: item.title,
         subtitle: '${item.artist} · ${item.year ?? '—'}',
         badge: item.liked ? Icons.favorite_rounded : null,
@@ -334,7 +334,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       key: ValueKey('lib-${t.id}-$i'),
       track: t,
       playing: widget.player.current?.id == t.id,
-      coverUrl: widget.api.cover(t.albumId, t.hasCover),
+      coverUrl: widget.api.cover(t.albumId, t.hasCover, w: 128),
       index: i + 1,
       onTap: () => widget.player.play(t, queue: widget.tracks),
       onRadio: () => widget.onRadio(t),
