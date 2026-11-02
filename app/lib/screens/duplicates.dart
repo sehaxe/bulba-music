@@ -90,7 +90,7 @@ class _DuplicatesScreenState extends State<DuplicatesScreen> {
               child: _error != null
                   ? Center(child: Text(_error!, style: T.caption(p.mute)))
                   : groups == null
-                  ? Center(child: Text('loading…', style: T.label(p.mute)))
+                  ? Center(child: Text('загружаю…', style: T.label(p.mute)))
                   : groups.isEmpty
                   ? Center(
                       child: Column(

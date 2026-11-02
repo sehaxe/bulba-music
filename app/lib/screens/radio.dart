@@ -47,7 +47,7 @@ class RadioScreen extends StatelessWidget {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text('no radio yet', style: T.displayM(p.mute)),
+                      Text('радио ещё не запущено', style: T.displayM(p.mute)),
                       const SizedBox(height: S.sm),
                       Text(
                         'long-press or right-click any track',

@@ -106,7 +106,7 @@ class CollectionView extends StatelessWidget {
                             children: [
                               PillButton(
                                 icon: Icons.play_arrow_rounded,
-                                label: 'play',
+                                label: 'играть',
                                 accent: accent,
                                 onTap: tracks.isEmpty
                                     ? () {}

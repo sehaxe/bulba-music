@@ -385,7 +385,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: S.lg),
           _Row(label: 'треков', value: '$tracks'),
           _Row(label: 'альбомов', value: '$albums'),
-          _Row(label: 'lossless', value: '$lossless из $tracks'),
+          _Row(label: 'лосслесс', value: '$lossless из $tracks'),
           _Row(label: 'размер', value: _bytes(bytes)),
           _Row(
             label: 'с признаками',

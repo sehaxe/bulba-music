@@ -264,7 +264,7 @@ class _WaveScreenState extends State<WaveScreen> {
                         ),
                       ),
                       const SizedBox(height: S.md),
-                      BracketButton('retry', onTap: _restart),
+                      BracketButton('ещё раз', onTap: _restart),
                     ],
                   ),
                 )

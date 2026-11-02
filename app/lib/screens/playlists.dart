@@ -88,7 +88,7 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
   Widget build(BuildContext context) {
     final p = Palette.of(context);
     final body = _loading
-        ? Center(child: Text('loading…', style: T.label(p.mute)))
+        ? Center(child: Text('загружаю…', style: T.label(p.mute)))
         : _items.isEmpty
         ? Center(
             child: Column(
@@ -507,7 +507,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
               const SizedBox(width: S.sm),
               PillButton(
                 icon: Icons.play_arrow_rounded,
-                label: 'play',
+                label: 'играть',
                 onTap: _tracks.isEmpty
                     ? null
                     : () => widget.player.play(_tracks.first, queue: _tracks),
@@ -555,7 +555,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
         Hr(color: p.hairlineStrong),
         Expanded(
           child: _loading
-              ? Center(child: Text('loading…', style: T.label(p.mute)))
+              ? Center(child: Text('загружаю…', style: T.label(p.mute)))
               : _tracks.isEmpty
               ? Center(
                   child: Text(

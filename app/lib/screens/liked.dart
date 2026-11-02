@@ -100,7 +100,7 @@ class _LikedScreenState extends State<LikedScreen> {
               if (_mode == 0 && tracks.isNotEmpty)
                 PillButton(
                   icon: Icons.play_arrow_rounded,
-                  label: 'play',
+                  label: 'играть',
                   onTap: () => widget.player.play(tracks.first, queue: tracks),
                 ),
             ],
@@ -119,7 +119,7 @@ class _LikedScreenState extends State<LikedScreen> {
                   embedded: true,
                 )
               : widget.likes.loading
-              ? Center(child: Text('loading…', style: T.label(p.mute)))
+              ? Center(child: Text('загружаю…', style: T.label(p.mute)))
               : tracks.isEmpty
               ? Center(
                   child: Column(

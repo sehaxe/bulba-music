@@ -500,7 +500,7 @@ void _openMenu(
           ),
           _MenuRow(
             icon: Icons.download_rounded,
-            label: 'download · ${track.format}',
+            label: 'скачать · ${track.format}',
           ),
           _MenuRow(
             icon: Icons.info_outline_rounded,

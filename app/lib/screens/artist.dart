@@ -141,7 +141,7 @@ class _ArtistScreenState extends State<ArtistScreen> {
                               ),
                               PillButton(
                                 icon: Icons.play_arrow_rounded,
-                                label: 'play',
+                                label: 'играть',
                                 onTap: page.topTracks.isEmpty
                                     ? null
                                     : () async {

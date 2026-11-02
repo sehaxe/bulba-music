@@ -595,7 +595,7 @@ class _ShellState extends State<Shell> {
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                BracketButton('retry', onTap: _load),
+                BracketButton('ещё раз', onTap: _load),
                 const SizedBox(width: S.md),
                 BracketButton('settings', onTap: () => _select(kSettingsTab)),
               ],
@@ -609,10 +609,10 @@ class _ShellState extends State<Shell> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('library is empty', style: T.displayM(p.mute)),
+            Text('библиотека пуста', style: T.displayM(p.mute)),
             const SizedBox(height: S.sm),
             Text(
-              'drop flac into the library folder, then rescan',
+              'положи flac в папку библиотеки и обнови',
               style: T.caption(p.ash),
             ),
           ],

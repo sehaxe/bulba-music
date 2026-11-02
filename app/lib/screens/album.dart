@@ -140,7 +140,7 @@ class _AlbumScreenState extends State<AlbumScreen> {
                             children: [
                               PillButton(
                                 icon: Icons.play_arrow_rounded,
-                                label: 'play',
+                                label: 'играть',
                                 onTap: tracks.isEmpty
                                     ? null
                                     : () => widget.player.play(

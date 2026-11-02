@@ -149,7 +149,7 @@ class _SearchScreenState extends State<SearchScreen> {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(S.xl, S.xxl, S.xl, S.md),
-          child: Text('search', style: T.displayM(p.ink)),
+          child: Text('поиск', style: T.displayM(p.ink)),
         ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: S.xl),
@@ -175,7 +175,7 @@ class _SearchScreenState extends State<SearchScreen> {
                     decoration: InputDecoration(
                       isDense: true,
                       border: InputBorder.none,
-                      hintText: 'track, artist, album — or a fragment',
+                      hintText: 'трек, артист, альбом — или обрывок',
                       hintStyle: T.body(p.ash),
                     ),
                   ),
@@ -209,10 +209,10 @@ class _SearchScreenState extends State<SearchScreen> {
           children: [
             Icon(Icons.search_rounded, size: 34, color: p.ash),
             const SizedBox(height: S.md),
-            Text('search the library', style: T.label(p.mute)),
+            Text('поиск по библиотеке', style: T.label(p.mute)),
             const SizedBox(height: S.xs),
             Text(
-              'fragments work — "happ" finds "Let It Happen"',
+              'обрывок работает: «happ» находит «Let It Happen»',
               style: T.caption(p.ash),
             ),
           ],
@@ -220,7 +220,7 @@ class _SearchScreenState extends State<SearchScreen> {
       );
     }
     if (_loading && results == null) {
-      return Center(child: Text('searching…', style: T.label(p.mute)));
+      return Center(child: Text('ищу…', style: T.label(p.mute)));
     }
     if (results == null || results.isEmpty) {
       // Text search failing does not mean the library has nothing: "грустный
@@ -244,7 +244,7 @@ class _SearchScreenState extends State<SearchScreen> {
       children: [
         if (_mood?.tracks.isNotEmpty ?? false) _moodSection(_mood!),
         if (results.artists.isNotEmpty) ...[
-          _SectionHeader(label: 'artists', count: results.artists.length),
+          _SectionHeader(label: 'артисты', count: results.artists.length),
           Padding(
             padding: const EdgeInsets.fromLTRB(S.xl, 0, S.xl, S.md),
             child: Wrap(
@@ -258,7 +258,7 @@ class _SearchScreenState extends State<SearchScreen> {
           ),
         ],
         if (results.albums.isNotEmpty) ...[
-          _SectionHeader(label: 'albums', count: results.albums.length),
+          _SectionHeader(label: 'альбомы', count: results.albums.length),
           SizedBox(
             height: 206,
             child: ListView.separated(
@@ -321,7 +321,7 @@ class _SearchScreenState extends State<SearchScreen> {
           ),
         ],
         if (results.tracks.isNotEmpty) ...[
-          _SectionHeader(label: 'tracks', count: results.tracks.length),
+          _SectionHeader(label: 'треки', count: results.tracks.length),
           for (var i = 0; i < results.tracks.length; i++)
             TrackRow(
               key: ValueKey('search-${results.tracks[i].id}'),
