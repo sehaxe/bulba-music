@@ -305,10 +305,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String get _greeting {
     final h = DateTime.now().hour;
-    if (h < 6) return 'still awake';
-    if (h < 12) return 'good morning';
-    if (h < 18) return 'good afternoon';
-    return 'good evening';
+    if (h < 5) return 'ещё не спишь';
+    if (h < 12) return 'доброе утро';
+    if (h < 18) return 'добрый день';
+    return 'добрый вечер';
   }
 
   @override

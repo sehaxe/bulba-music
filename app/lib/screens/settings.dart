@@ -10,6 +10,7 @@ import 'duplicates.dart';
 import '../player/controller.dart';
 import '../player/likes.dart';
 import '../state/prefs.dart';
+import '../state/profiles.dart';
 import 'stats.dart';
 
 /// Settings is a list of doors, not one long scroll: each category opens on
@@ -27,6 +28,8 @@ class SettingsScreen extends StatefulWidget {
     required this.onRescan,
     required this.onOpenAlbum,
     required this.onPlayTrack,
+    required this.profiles,
+    required this.onProfileChanged,
   });
 
   final Api api;
@@ -37,6 +40,8 @@ class SettingsScreen extends StatefulWidget {
   final Future<void> Function() onRescan;
   final void Function(int albumId, String title, String artist) onOpenAlbum;
   final void Function(StatTrack) onPlayTrack;
+  final Profiles profiles;
+  final Future<void> Function(String phrase) onProfileChanged;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -88,18 +93,82 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) setState(() => _note = 'сервер: $trimmed');
   }
 
-  Future<void> _register() async {
+  /// A second listener on the same device: their own history, likes and mixes.
+  /// The phrase is shown once and kept in the switcher, because the server has
+  /// no way to hand it back later.
+  Future<void> _addProfile() async {
+    final controller = TextEditingController(text: 'слушатель');
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        final p = Palette.of(context);
+        return AlertDialog(
+          backgroundColor: p.roomElevated,
+          title: Text('новый профиль', style: T.heading(p.ink)),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            cursorColor: AccentScope.of(context),
+            style: T.body(p.ink),
+            decoration: InputDecoration(
+              hintText: 'имя',
+              hintStyle: T.body(p.ash),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text('отмена', style: T.label(p.mute)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(controller.text),
+              child: Text('создать', style: T.label(AccentScope.of(context))),
+            ),
+          ],
+        );
+      },
+    );
+    if (name == null || name.trim().isEmpty) return;
     try {
-      final session = await widget.api.register('слушатель');
+      final session = await widget.api.register(name.trim());
       final phrase = session['phrase'] as String? ?? '';
-      _token = session['token'] as String?;
-      widget.api.token = _token;
-      await widget.prefs.setToken(_token);
+      final token = session['token'] as String?;
+      widget.api.token = token;
+      await widget.prefs.setToken(token);
+      await widget.profiles.save(
+        Profile(
+          name: name.trim(),
+          phrase: phrase,
+          userId: session['user_id'] as int?,
+        ),
+      );
+      _token = token;
       if (!mounted) return;
       await _showPhrase(phrase);
+      await widget.onProfileChanged(phrase);
     } catch (e) {
-      if (mounted) setState(() => _note = 'ошибка: $e');
+      if (mounted) setState(() => _note = 'не вышло: $e');
     }
+  }
+
+  Future<void> _switchTo(Profile profile) async {
+    if (widget.profiles.activePhrase == profile.phrase) return;
+    try {
+      await widget.profiles.setActive(profile.phrase);
+      await widget.onProfileChanged(profile.phrase);
+    } catch (e) {
+      if (mounted) setState(() => _note = 'войти не вышло: $e');
+    }
+  }
+
+  Future<void> _signOut() async {
+    widget.api.token = null;
+    await widget.prefs.setToken(null);
+    final active = widget.profiles.active;
+    if (active != null) await widget.profiles.remove(active.phrase);
+    if (!mounted) return;
+    setState(() => _token = null);
+    await _load();
   }
 
   Future<void> _showPhrase(String phrase) async {
@@ -608,25 +677,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
             style: T.caption(p.mute),
           ),
           const SizedBox(height: S.md),
-          _Row(
-            label: 'устройство',
-            value: _token == null ? 'локальное, без аккаунта' : 'привязано',
-          ),
-          const SizedBox(height: S.sm),
+          for (final profile in widget.profiles.all) ...[
+            _ProfileRow(
+              profile: profile,
+              active: widget.profiles.activePhrase == profile.phrase,
+              onTap: () => _switchTo(profile),
+              onRemove: () async {
+                await widget.profiles.remove(profile.phrase);
+                if (mounted) setState(() {});
+              },
+            ),
+            const SizedBox(height: S.xs),
+          ],
+          if (widget.profiles.all.isEmpty)
+            _Row(
+              label: 'профиль',
+              value: _token == null ? 'локальный, без аккаунта' : 'привязано',
+            ),
+          const SizedBox(height: S.md),
           Wrap(
             spacing: S.sm,
             runSpacing: S.sm,
             children: [
               PillButton(
-                icon: Icons.key_rounded,
-                label: 'создать фразу',
-                onTap: _register,
+                icon: Icons.person_add_alt_rounded,
+                label: 'новый профиль',
+                onTap: _addProfile,
               ),
               PillButton(
-                icon: Icons.login_rounded,
+                icon: Icons.key_rounded,
                 label: 'ввести фразу',
                 onTap: _login,
               ),
+              if (_token != null)
+                PillButton(
+                  icon: Icons.logout_rounded,
+                  label: 'выйти',
+                  onTap: _signOut,
+                ),
             ],
           ),
         ];
@@ -955,6 +1043,71 @@ class _Choice extends StatelessWidget {
           border: Border.all(color: p.hairline),
         ),
         child: Text(label, style: T.label(selected ? p.canvas : p.mute)),
+      ),
+    );
+  }
+}
+
+class _ProfileRow extends StatelessWidget {
+  const _ProfileRow({
+    required this.profile,
+    required this.active,
+    required this.onTap,
+    required this.onRemove,
+  });
+
+  final Profile profile;
+  final bool active;
+  final VoidCallback onTap;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    final accent = AccentScope.of(context);
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: S.md, vertical: S.sm),
+        decoration: BoxDecoration(
+          border: Border.all(color: active ? accent : p.hairline),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 32,
+              height: 32,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: active ? accent : p.card,
+              ),
+              child: Text(
+                profile.name.isEmpty ? '?' : profile.name[0].toUpperCase(),
+                style: T.bodyStrong(active ? p.canvas : p.mute),
+              ),
+            ),
+            const SizedBox(width: S.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(profile.name, style: T.bodyStrong(p.ink)),
+                  Text(
+                    active ? 'активный профиль' : 'нажми, чтобы переключиться',
+                    style: T.micro(active ? accent : p.ash),
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              tooltip: 'убрать с устройства',
+              onPressed: onRemove,
+              icon: Icon(Icons.close_rounded, size: 18, color: p.ash),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -31,6 +31,11 @@ class LikesStore extends ChangeNotifier {
 
   Future<void> refreshTracks() async {
     _loading = true;
+    // Screens kick this off from initState, which runs *during* a build. A
+    // synchronous notify there hits the ancestor listening widget mid-build and
+    // throws "setState called during build" — so the spinner appears one frame
+    // later instead.
+    await Future<void>.delayed(Duration.zero);
     notifyListeners();
     try {
       _tracks = await api.likes();

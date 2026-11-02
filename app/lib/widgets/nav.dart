@@ -19,12 +19,12 @@ const kSearchTab = 2;
 const kLibraryTab = 3;
 
 const kNavItems = <NavItemData>[
-  NavItemData(Icons.home_rounded, 'home'),
+  NavItemData(Icons.home_rounded, 'главная'),
   NavItemData(Icons.graphic_eq_rounded, 'волна'),
-  NavItemData(Icons.search_rounded, 'search'),
-  NavItemData(Icons.grid_view_rounded, 'library'),
-  NavItemData(Icons.favorite_rounded, 'liked'),
-  NavItemData(Icons.tune_rounded, 'settings'),
+  NavItemData(Icons.search_rounded, 'поиск'),
+  NavItemData(Icons.grid_view_rounded, 'библиотека'),
+  NavItemData(Icons.favorite_rounded, 'любимое'),
+  NavItemData(Icons.tune_rounded, 'настройки'),
 ];
 
 /// A floating capsule instead of a tab bar: the active pill slides between

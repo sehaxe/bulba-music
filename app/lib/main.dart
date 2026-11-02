@@ -16,6 +16,7 @@ import 'player/likes.dart';
 import 'screens/auth.dart';
 import 'screens/onboarding.dart';
 import 'state/prefs.dart';
+import 'state/profiles.dart';
 import 'shell.dart';
 
 /// Set with `--dart-define=SHOT=/path.png` to dump the first frame to a file.
@@ -66,6 +67,12 @@ class _BulbaAppState extends State<BulbaApp> {
   late final Downloads downloads = Downloads(api);
   late final LikesStore likes = LikesStore(api);
   Prefs? _prefs;
+  Profiles? _profiles;
+
+  /// Bumped when the listener switches profile: a new key rebuilds the shell
+  /// from scratch, which is the only honest way to make every cached list,
+  /// like and mix belong to the new person.
+  int _profileEpoch = 0;
   bool _ready = false;
   bool _onboarding = false;
   bool _needsAuth = false;
@@ -75,6 +82,17 @@ class _BulbaAppState extends State<BulbaApp> {
     super.initState();
     _boot();
     if (_shotPath.isNotEmpty) _captureAfterFirstFrame();
+  }
+
+  /// Switching profile is a re-login plus a rebuild: the token changes, so
+  /// every request the old shell had cached is no longer that person's data.
+  Future<void> _switchProfile(String phrase) async {
+    final session = await api.login(phrase);
+    final token = session['token'] as String?;
+    api.token = token;
+    if (token != null) await _prefs?.setToken(token);
+    if (!mounted) return;
+    setState(() => _profileEpoch++);
   }
 
   Future<void> _boot() async {
@@ -121,9 +139,11 @@ class _BulbaAppState extends State<BulbaApp> {
       }, onError: (_) {});
     }
     final auth = await api.authStatus();
+    final profiles = await Profiles.load();
     if (!mounted) return;
     setState(() {
       _prefs = prefs;
+      _profiles = profiles;
       _needsAuth = auth == 'needs_auth';
       _onboarding = !prefs.onboardingSeen && !skipOnboarding && !_needsAuth;
       _ready = true;
@@ -237,6 +257,9 @@ class _BulbaAppState extends State<BulbaApp> {
                     },
                   )
                 : Shell(
+                    key: ValueKey('shell-$_profileEpoch'),
+                    profiles: _profiles!,
+                    onProfileChanged: _switchProfile,
                     api: api,
                     player: player,
                     likes: likes,

@@ -13,6 +13,7 @@ import 'player/controller.dart';
 import 'player/downloads.dart';
 import 'player/likes.dart';
 import 'state/prefs.dart';
+import 'state/profiles.dart';
 import 'screens/collection.dart';
 import 'screens/home.dart';
 import 'screens/library.dart';
@@ -39,6 +40,8 @@ class Shell extends StatefulWidget {
     required this.prefs,
     required this.downloads,
     required this.cast,
+    required this.profiles,
+    required this.onProfileChanged,
   });
   final Api api;
   final PlayerController player;
@@ -46,6 +49,8 @@ class Shell extends StatefulWidget {
   final Prefs prefs;
   final Downloads downloads;
   final CastStore cast;
+  final Profiles profiles;
+  final Future<void> Function(String phrase) onProfileChanged;
   final ValueNotifier<ThemeMode> themeMode;
 
   @override
@@ -451,7 +456,7 @@ class _ShellState extends State<Shell> {
         Expanded(
           child: ListenableBuilder(
             listenable: widget.likes,
-            builder: (context, _) => _screen(),
+            builder: (context, _) => _stacked(),
           ),
         ),
       ],
@@ -510,12 +515,21 @@ class _ShellState extends State<Shell> {
     );
   }
 
+  /// Tabs that have been visited at least once. A tab is built on first visit
+  /// and kept alive afterwards, so coming back to the library does not refetch
+  /// it, does not reset its scroll and does not replay its entrance: the shell
+  /// remembering where you were is most of what "feels like an app" means.
+  late final Set<int> _visited = {_tab};
+
   void _select(int i) => setState(() {
     _tab = i;
     _stack.clear();
+    _visited.add(i);
   });
 
   Widget _settings() => SettingsScreen(
+    profiles: widget.profiles,
+    onProfileChanged: widget.onProfileChanged,
     api: widget.api,
     player: widget.player,
     prefs: widget.prefs,
@@ -526,9 +540,39 @@ class _ShellState extends State<Shell> {
     onPlayTrack: _playStatTrack,
   );
 
-  Widget _screen() {
+  /// The detail stack wins over the tab body, but the tab bodies underneath stay
+  /// alive: an artist opened from the library and popped must return to the
+  /// library exactly as it was, not to a fresh fetch.
+  Widget _stacked() {
+    final tabs = IndexedStack(
+      key: const ValueKey('tabs'),
+      index: _tab,
+      children: [
+        for (var i = 0; i <= kSettingsTab; i++)
+          if (_visited.contains(i)) _screenFor(i) else const SizedBox.shrink(),
+      ],
+    );
+    if (_stack.isEmpty) return tabs;
+    // The detail sits *above* the tabs rather than replacing them: opening an
+    // album and going back must return to the library exactly as it was.
+    return Stack(
+      children: [
+        tabs,
+        Positioned.fill(
+          child: ColoredBox(
+            color: Palette.of(context).canvas,
+            child: _screen(),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _screen() => _screenFor(_tab);
+
+  Widget _screenFor(int tab) {
     final p = Palette.of(context);
-    if (_tab == kSettingsTab) return _settings();
+    if (tab == kSettingsTab) return _settings();
     if (_loading) {
       return Center(child: Text('[ loading ]', style: T.label(p.mute)));
     }
@@ -620,7 +664,7 @@ class _ShellState extends State<Shell> {
         accent: _accent,
       );
     }
-    switch (_tab) {
+    switch (tab) {
       case 0:
         return HomeScreen(
           tracks: _tracks,

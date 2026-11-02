@@ -50,6 +50,14 @@ class PlayerController extends ChangeNotifier {
   String quality = 'flac';
   Timer? _fade;
   bool _fading = false;
+  bool _disposed = false;
+
+  /// mpv keeps emitting progress ticks for a moment after `dispose`, and a
+  /// notify on a disposed ChangeNotifier is an assertion in debug and a
+  /// use-after-free in principle. Every listener goes through here.
+  void _notify() {
+    if (!_disposed) notifyListeners();
+  }
 
   void _bind(Player player) {
     player.stream.position.listen((p) {
@@ -73,14 +81,14 @@ class PlayerController extends ChangeNotifier {
       _position = p;
       _anchor = p;
       _anchorAt = DateTime.now();
-      notifyListeners();
+      _notify();
       _maybeFade();
     });
     player.stream.duration.listen((d) {
       if (!identical(player, _active)) return;
       if (d > Duration.zero) {
         _duration = d;
-        notifyListeners();
+        _notify();
       }
     });
     player.stream.playing.listen((v) {
@@ -88,7 +96,7 @@ class PlayerController extends ChangeNotifier {
       _playing = v;
       _anchor = _position;
       _anchorAt = DateTime.now();
-      notifyListeners();
+      _notify();
     });
     player.stream.completed.listen((done) {
       if (!done || !identical(player, _active) || _fading) return;
@@ -104,7 +112,7 @@ class PlayerController extends ChangeNotifier {
       if (sleepAfterTrack) {
         sleepAfterTrack = false;
         _playing = false;
-        notifyListeners();
+        _notify();
         return;
       }
       next();
@@ -608,6 +616,7 @@ class PlayerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _cursor?.cancel();
     _fade?.cancel();
     _progress?.cancel();
