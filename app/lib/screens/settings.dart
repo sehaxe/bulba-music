@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
@@ -54,6 +56,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _token = widget.prefs.token;
     _load();
+    // `BULBA_DOOR=sound` opens a pane on launch, so a settings block can be
+    // reviewed with the same screenshot harness as every other screen.
+    final door = Platform.environment['BULBA_DOOR'];
+    if (door != null) {
+      for (final d in _Door.values) {
+        if (d.name == door) _open = d;
+      }
+    }
   }
 
   Future<void> _load() async {
