@@ -8,8 +8,6 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
-// ignore: implementation_imports
-import 'package:media_kit/src/player/native/player/real.dart' show NativePlayer;
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

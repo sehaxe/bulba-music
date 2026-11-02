@@ -1,13 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:media_kit/media_kit.dart' show Media, Player;
-// media_kit keeps mpv's property accessor on the native platform object and
-// does not export it. The alternative is no equaliser at all.
-// ignore: implementation_imports
-import 'package:media_kit/src/player/native/player/real.dart' show NativePlayer;
+import 'package:media_kit/media_kit.dart' show Media, Player, NativePlayer;
 
 import '../api/client.dart';
+import 'downloads.dart';
 import 'gain.dart';
 import 'signals.dart';
 
@@ -112,6 +109,10 @@ class PlayerController extends ChangeNotifier {
 
   final Api api;
   final SignalLog signals;
+
+  /// Set once the app knows where its files live; the player then opens a local
+  /// file for anything downloaded and never asks the server for it.
+  Downloads? downloads;
   Timer? _progress;
 
   Track? current;
@@ -213,8 +214,13 @@ class PlayerController extends ChangeNotifier {
         );
       }
     });
+    final local = downloads?.pathFor(track.id);
     await _active.open(
-      Media(api.stream(track.id, quality: quality).toString()),
+      Media(
+        local != null
+            ? Uri.file(local).toString()
+            : api.stream(track.id, quality: quality).toString(),
+      ),
     );
     // A new track means a new loudness value: re-apply level matching now
     // rather than on the next volume nudge.

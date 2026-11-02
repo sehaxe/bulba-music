@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'dart:math' as math;
 
 import 'package:flutter/scheduler.dart';
@@ -256,6 +258,19 @@ class _CoverArtState extends State<CoverArt>
     final url = widget.url;
     final image = url == null
         ? placeholder
+        : url.startsWith('file://')
+        // A downloaded cover lives next to the audio: offline has to look like
+        // online, not like a hatched box.
+        ? Image.file(
+            File(Uri.parse(url).toFilePath()),
+            width: widget.size,
+            height: widget.size,
+            cacheWidth: (widget.size * MediaQuery.devicePixelRatioOf(context))
+                .round(),
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            errorBuilder: (_, _, _) => placeholder,
+          )
         : Image.network(
             url,
             width: widget.size,

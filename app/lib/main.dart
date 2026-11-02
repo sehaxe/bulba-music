@@ -4,11 +4,13 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:media_kit/media_kit.dart' show MediaKit;
+import 'package:path_provider/path_provider.dart';
 
 import 'api/client.dart';
 import 'design/tokens.dart';
 import 'player/background.dart';
 import 'player/controller.dart';
+import 'player/downloads.dart';
 import 'player/likes.dart';
 import 'screens/auth.dart';
 import 'screens/onboarding.dart';
@@ -59,6 +61,7 @@ class _BulbaAppState extends State<BulbaApp> {
     ),
   );
   late final PlayerController player = PlayerController(api);
+  late final Downloads downloads = Downloads(api);
   late final LikesStore likes = LikesStore(api);
   Prefs? _prefs;
   bool _ready = false;
@@ -85,10 +88,24 @@ class _BulbaAppState extends State<BulbaApp> {
     player.setVolume(prefs.volume);
     // Android suspends the process without a foreground service, so the audio
     // dies with the window. Start it before anything can play.
+    await downloads.load();
+    api.cacheDir = await getApplicationSupportDirectory();
+    player.downloads = downloads;
+    api.localCover = downloads.localCover;
+    api.localPeaks = downloads.localPeaks;
+    downloads.defaultQuality = prefs.quality == 'flac' ? 'flac' : 'opus128';
     await startBackgroundAudio(player, api);
     final skipOnboarding =
         const bool.fromEnvironment('SHOT_ONBOARD') ||
         Platform.environment['BULBA_SKIP_ONBOARDING'] == '1';
+    // `BULBA_DOWNLOAD=<id>` downloads one track on boot. The download path is
+    // otherwise reachable only by hand, and "offline works" is worth proving.
+    final dlId = int.tryParse(Platform.environment['BULBA_DOWNLOAD'] ?? '');
+    if (dlId != null) {
+      api.track(dlId).then((t) {
+        if (t != null) downloads.enqueue(t, quality: 'opus128');
+      }, onError: (_) {});
+    }
     final auth = await api.authStatus();
     if (!mounted) return;
     setState(() {
@@ -166,50 +183,54 @@ class _BulbaAppState extends State<BulbaApp> {
       key: _shotKey,
       child: ValueListenableBuilder<ThemeMode>(
         valueListenable: themeMode,
-        builder: (context, mode, _) => MaterialApp(
-          builder: (context, child) =>
-              PreviewSize(child: child ?? const SizedBox()),
-          title: 'bulba music',
-          debugShowCheckedModeBanner: false,
-          theme: _theme(Palette.light, Brightness.light),
-          darkTheme: _theme(Palette.inkNight, Brightness.dark),
-          themeMode: mode,
-          home: !_ready
-              ? const ColoredBox(color: Color(0xFF141210))
-              : _needsAuth
-              ? AuthScreen(
-                  api: api,
-                  player: player,
-                  likes: likes,
-                  onSignedIn: (token) async {
-                    await _prefs?.setToken(token);
-                    if (mounted) setState(() => _needsAuth = false);
-                  },
-                )
-              : _onboarding
-              ? Onboarding(
-                  api: api,
-                  initialTheme: themeMode.value,
-                  onTheme: (m) {
-                    themeMode.value = m;
-                    _prefs?.setThemeMode(switch (m) {
-                      ThemeMode.light => 'light',
-                      ThemeMode.system => 'system',
-                      _ => 'dark',
-                    });
-                  },
-                  onDone: () async {
-                    await _prefs?.setOnboardingSeen();
-                    setState(() => _onboarding = false);
-                  },
-                )
-              : Shell(
-                  api: api,
-                  player: player,
-                  likes: likes,
-                  prefs: _prefs!,
-                  themeMode: themeMode,
-                ),
+        builder: (context, mode, _) => DownloadsScope(
+          downloads: downloads,
+          child: MaterialApp(
+            builder: (context, child) =>
+                PreviewSize(child: child ?? const SizedBox()),
+            title: 'bulba music',
+            debugShowCheckedModeBanner: false,
+            theme: _theme(Palette.light, Brightness.light),
+            darkTheme: _theme(Palette.inkNight, Brightness.dark),
+            themeMode: mode,
+            home: !_ready
+                ? const ColoredBox(color: Color(0xFF141210))
+                : _needsAuth
+                ? AuthScreen(
+                    api: api,
+                    player: player,
+                    likes: likes,
+                    onSignedIn: (token) async {
+                      await _prefs?.setToken(token);
+                      if (mounted) setState(() => _needsAuth = false);
+                    },
+                  )
+                : _onboarding
+                ? Onboarding(
+                    api: api,
+                    initialTheme: themeMode.value,
+                    onTheme: (m) {
+                      themeMode.value = m;
+                      _prefs?.setThemeMode(switch (m) {
+                        ThemeMode.light => 'light',
+                        ThemeMode.system => 'system',
+                        _ => 'dark',
+                      });
+                    },
+                    onDone: () async {
+                      await _prefs?.setOnboardingSeen();
+                      setState(() => _onboarding = false);
+                    },
+                  )
+                : Shell(
+                    api: api,
+                    player: player,
+                    likes: likes,
+                    prefs: _prefs!,
+                    themeMode: themeMode,
+                    downloads: downloads,
+                  ),
+          ),
         ),
       ),
     );

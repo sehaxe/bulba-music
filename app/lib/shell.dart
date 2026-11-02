@@ -8,12 +8,14 @@ import 'design/accent.dart';
 import 'design/components.dart';
 import 'design/tokens.dart';
 import 'player/controller.dart';
+import 'player/downloads.dart';
 import 'player/likes.dart';
 import 'state/prefs.dart';
 import 'screens/collection.dart';
 import 'screens/home.dart';
 import 'screens/library.dart';
 import 'screens/player_screen.dart';
+import 'screens/duplicates.dart';
 import 'screens/playlists.dart';
 import 'screens/wave.dart';
 import 'screens/liked.dart';
@@ -33,11 +35,13 @@ class Shell extends StatefulWidget {
     required this.themeMode,
     required this.likes,
     required this.prefs,
+    required this.downloads,
   });
   final Api api;
   final PlayerController player;
   final LikesStore likes;
   final Prefs prefs;
+  final Downloads downloads;
   final ValueNotifier<ThemeMode> themeMode;
 
   @override
@@ -120,6 +124,18 @@ class _ShellState extends State<Shell> {
     _load();
     widget.likes.load();
     _openPlaylistFromEnv();
+    // Review harness for the duplicates screen: it lives three taps deep in the
+    // settings, which means nobody would ever look at it.
+    if (Platform.environment['BULBA_DUPLICATES'] == '1') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => DuplicatesScreen(api: widget.api),
+          ),
+        );
+      });
+    }
   }
 
   @override
@@ -187,7 +203,16 @@ class _ShellState extends State<Shell> {
           );
         }
       }
-      if (autoPlay && tracks.isNotEmpty) {
+      // `BULBA_PLAY=<id>` plays one specific track, which is how offline
+      // playback is reviewed: download it, stop the server, press play.
+      final playId = int.tryParse(Platform.environment['BULBA_PLAY'] ?? '');
+      if (playId != null) {
+        final target = tracks.where((t) => t.id == playId).toList();
+        if (target.isNotEmpty) {
+          await widget.player.play(target.first, queue: tracks);
+          if (mounted) _openPlayer();
+        }
+      } else if (autoPlay && tracks.isNotEmpty) {
         await widget.player.play(tracks.first, queue: tracks);
         final barOnly = Platform.environment['BULBA_AUTOPLAY'] == 'bar';
         if (mounted && !barOnly) _openPlayer();

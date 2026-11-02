@@ -5,6 +5,7 @@ import '../api/client.dart';
 import '../design/components.dart';
 import '../design/tokens.dart';
 import '../player/controller.dart';
+import '../player/downloads.dart';
 import '../player/likes.dart';
 import '../widgets/track_menu.dart';
 import '../widgets/track_row.dart';
@@ -150,6 +151,10 @@ class _AlbumScreenState extends State<AlbumScreen> {
                               const SizedBox(width: S.sm),
                               _Heart(liked: _liked, onTap: _toggleLike),
                               const SizedBox(width: S.sm),
+                              if (DownloadsScope.maybeOf(context)
+                                  case final dl?)
+                                _DownloadAlbum(downloads: dl, tracks: tracks),
+                              const SizedBox(width: S.sm),
                               _CopyLink(
                                 path: '/al/${widget.albumId}',
                                 base: widget.api.base,
@@ -195,6 +200,31 @@ class _AlbumScreenState extends State<AlbumScreen> {
     final d = Duration(milliseconds: ms);
     if (d.inHours > 0) return '${d.inHours} ч ${d.inMinutes % 60} мин';
     return '${d.inMinutes} мин';
+  }
+}
+
+/// One button for "this album on the phone, in the file system".
+class _DownloadAlbum extends StatelessWidget {
+  const _DownloadAlbum({required this.downloads, required this.tracks});
+  final Downloads downloads;
+  final List<Track> tracks;
+
+  @override
+  Widget build(BuildContext context) {
+    final done = tracks.where((t) => downloads.has(t.id)).length;
+    final all = done == tracks.length && tracks.isNotEmpty;
+    return PillButton(
+      icon: all ? Icons.download_done_rounded : Icons.download_rounded,
+      label: all ? 'скачано' : 'скачать · $done/${tracks.length}',
+      onTap: all
+          ? () async {
+              for (final t in tracks) {
+                await downloads.remove(t.id);
+              }
+            }
+          : () =>
+                downloads.enqueueAll(tracks, quality: downloads.defaultQuality),
+    );
   }
 }
 

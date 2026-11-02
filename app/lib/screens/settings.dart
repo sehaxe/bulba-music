@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../design/components.dart';
 import '../design/tokens.dart';
+import '../player/downloads.dart';
+import 'duplicates.dart';
 import '../player/controller.dart';
 import '../player/likes.dart';
 import '../state/prefs.dart';
@@ -308,6 +310,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: S.sm),
             Text(_note, style: T.micro(p.mute)),
           ],
+          const SizedBox(height: S.lg),
+          Wrap(
+            spacing: S.sm,
+            runSpacing: S.sm,
+            children: [
+              _Choice(
+                label: duplicateCount == null
+                    ? 'дубли · проверить'
+                    : duplicateCount == 0
+                    ? 'дублей нет'
+                    : 'дубли · $duplicateCount',
+                selected: false,
+                onTap: _openDuplicates,
+              ),
+            ],
+          ),
+          const SizedBox(height: S.sm),
+          Text(
+            'Один артист, попавший в библиотеку под двумя именами, делит историю '
+            'прослушиваний и ломает радио: «Nirvana» и «NIRVANA (US)» — это одна '
+            'страница, а не две.',
+            style: T.micro(p.ash),
+          ),
         ];
 
       case _Door.sound:
@@ -486,7 +511,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ];
 
       case _Door.sync:
+        final dl = DownloadsScope.maybeOf(context);
         return [
+          if (dl != null) ...[
+            Text('на этом устройстве', style: T.caption(p.mute)),
+            const SizedBox(height: S.sm),
+            _Row(label: 'скачано', value: '${dl.count} треков'),
+            _Row(label: 'занимают', value: _bytes(dl.bytes.toDouble())),
+            const SizedBox(height: S.sm),
+            Wrap(
+              spacing: S.sm,
+              runSpacing: S.sm,
+              children: [
+                PillButton(
+                  icon: Icons.delete_sweep_rounded,
+                  label: 'очистить загрузки',
+                  onTap: dl.count == 0
+                      ? null
+                      : () async {
+                          await dl.clear();
+                          if (mounted) setState(() {});
+                        },
+                ),
+              ],
+            ),
+            const SizedBox(height: S.sm),
+            Text(
+              'Скачанный трек играет с диска: сервер для него больше не нужен. '
+              'Формат берётся из «звук → поток»: flac — мастер, opus 128 — почти '
+              'в десять раз меньше.',
+              style: T.micro(p.ash),
+            ),
+            const SizedBox(height: S.lg),
+            Hr(color: p.hairline),
+            const SizedBox(height: S.lg),
+          ],
           Text(
             'Одна фраза на все устройства: зарегистрируйся на компьютере, введи '
             'те же двенадцать слов на телефоне — и это один и тот же слушатель с '
@@ -570,6 +629,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Text(_note, style: T.micro(p.mute)),
           ],
         ];
+    }
+  }
+
+  int? duplicateCount;
+
+  Future<void> _openDuplicates() async {
+    try {
+      final groups = await widget.api.duplicates();
+      if (!mounted) return;
+      setState(() => duplicateCount = groups.length);
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => DuplicatesScreen(api: widget.api, initial: groups),
+        ),
+      );
+      final after = await widget.api.duplicates();
+      if (mounted) setState(() => duplicateCount = after.length);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('не вышло: $e')));
+      }
     }
   }
 

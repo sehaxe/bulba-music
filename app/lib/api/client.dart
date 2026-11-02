@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
@@ -544,6 +545,39 @@ class PlaybackCursor {
   }
 }
 
+/// A group of rows that look like the same artist or album.
+class DupGroup {
+  const DupGroup({
+    required this.kind,
+    required this.keep,
+    required this.members,
+  });
+  final String kind;
+  final int keep;
+  final List<DupMember> members;
+
+  factory DupGroup.fromJson(Map<String, dynamic> j) => DupGroup(
+    kind: j['kind'] as String,
+    keep: j['keep'] as int,
+    members: (j['members'] as List<dynamic>)
+        .map((e) => DupMember.fromJson(e as Map<String, dynamic>))
+        .toList(),
+  );
+}
+
+class DupMember {
+  const DupMember({required this.id, required this.name, required this.tracks});
+  final int id;
+  final String name;
+  final int tracks;
+
+  factory DupMember.fromJson(Map<String, dynamic> j) => DupMember(
+    id: j['id'] as int,
+    name: j['name'] as String,
+    tracks: (j['tracks'] as num).toInt(),
+  );
+}
+
 class Api {
   Api(this.base) {
     _http = _AuthClient(http.Client(), () => token);
@@ -602,14 +636,48 @@ class Api {
     return jsonDecode(r.body) as Map<String, dynamic>;
   }
 
+  /// Where the last successful catalogue is kept so the app still opens with no
+  /// network. Set once at boot; without it every call goes to the server.
+  Directory? cacheDir;
+
+  /// Set at boot so covers and waveforms can prefer the copy that came with a
+  /// download. Kept as an untyped callback pair to avoid a circular import.
+  String? Function(int albumId)? localCover;
+  List<int>? Function(int trackId)? localPeaks;
+
   Future<List<Track>> tracks({int limit = 2000, int offset = 0}) async {
-    final r = await _http
-        .get(Uri.parse('$base/api/tracks?limit=$limit&offset=$offset'))
-        .timeout(const Duration(seconds: 10));
-    if (r.statusCode != 200) {
-      throw ApiException('GET /tracks → ${r.statusCode}');
+    final cache = cacheDir == null
+        ? null
+        : File('${cacheDir!.path}/catalogue-$offset.json');
+    try {
+      final r = await _http
+          .get(Uri.parse('$base/api/tracks?limit=$limit&offset=$offset'))
+          .timeout(const Duration(seconds: 10));
+      if (r.statusCode != 200) {
+        throw ApiException('GET /tracks → ${r.statusCode}');
+      }
+      // Written before parsing so a decode bug cannot cost the cache.
+      if (cache != null) {
+        try {
+          await cache.parent.create(recursive: true);
+          await cache.writeAsString(r.body);
+        } catch (_) {}
+      }
+      return _parseTracks(r.body);
+    } catch (e) {
+      // Offline is a state, not an error: a downloaded library has to be
+      // reachable when the server is on the other side of a dead tunnel.
+      if (cache != null && cache.existsSync()) {
+        try {
+          return _parseTracks(await cache.readAsString());
+        } catch (_) {}
+      }
+      rethrow;
     }
-    final list = jsonDecode(r.body) as List<dynamic>;
+  }
+
+  static List<Track> _parseTracks(String body) {
+    final list = jsonDecode(body) as List<dynamic>;
     return list
         .map((e) => Track.fromJson(e as Map<String, dynamic>))
         .toList(growable: false);
@@ -875,6 +943,11 @@ class Api {
   Future<List<int>> peaks(int id) async {
     final hit = _peaks[id];
     if (hit != null) return hit;
+    final local = localPeaks?.call(id);
+    if (local != null) {
+      _peaks[id] = local;
+      return local;
+    }
     final r = await _http
         .get(Uri.parse('$base/api/tracks/$id/peaks'))
         .timeout(const Duration(seconds: 30));
@@ -889,10 +962,12 @@ class Api {
   /// Cover URL at a given pixel width. The server renders and caches one file
   /// per width, so a 64 px row thumbnail must not pull the 512 px artwork: the
   /// difference is ~8 KB against ~120 KB, and a home screen shows dozens.
-  String? cover(int? albumId, bool hasCover, {int w = 512}) =>
-      hasCover && albumId != null
-      ? '$base/api/albums/$albumId/cover?w=$w'
-      : null;
+  String? cover(int? albumId, bool hasCover, {int w = 512}) {
+    if (!hasCover || albumId == null) return null;
+    final local = localCover?.call(albumId);
+    if (local != null) return Uri.file(local).toString();
+    return '$base/api/albums/$albumId/cover?w=$w';
+  }
 }
 
 /// A view over tracks that share an album. The catalogue has albums as rows on
@@ -1076,6 +1151,32 @@ extension PlaylistApi on Api {
           body: jsonEncode({'track_id': trackId, 'position_ms': positionMs}),
         )
         .timeout(const Duration(seconds: 10));
+  }
+
+  Future<List<DupGroup>> duplicates() async {
+    final r = await _http
+        .get(Uri.parse('$base/api/library/duplicates'))
+        .timeout(const Duration(seconds: 20));
+    if (r.statusCode != 200) throw ApiException('duplicates → ${r.statusCode}');
+    final list = jsonDecode(r.body) as List<dynamic>;
+    return list
+        .map((e) => DupGroup.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> mergeDuplicates({
+    required String kind,
+    required int keep,
+    required int merge,
+  }) async {
+    final r = await _http
+        .post(
+          Uri.parse('$base/api/library/merge'),
+          headers: {'content-type': 'application/json'},
+          body: jsonEncode({'kind': kind, 'keep': keep, 'merge': merge}),
+        )
+        .timeout(const Duration(seconds: 60));
+    if (r.statusCode != 200) throw ApiException('merge → ${r.statusCode}');
   }
 
   Future<List<Playlist>> playlists() async {

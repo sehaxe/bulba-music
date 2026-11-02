@@ -75,6 +75,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/register", post(register))
         .route("/api/auth/login", post(login))
         .route("/api/auth/me", get(whoami))
+        .route("/api/library/duplicates", get(list_duplicates))
+        .route("/api/library/merge", post(merge_duplicate))
         .route("/api/library/normalize", post(normalize_names))
         .route("/api/library/tree", post(library_tree))
         // Human links: what you paste into a phone over Tailscale.
@@ -651,6 +653,41 @@ async fn delete_playlist(
 struct PlaylistTrackBody {
     track_id: i64,
     position: Option<i64>,
+}
+
+async fn list_duplicates(
+    State(st): State<AppState>,
+) -> Result<Json<Vec<crate::dupes::DupGroup>>, ApiError> {
+    let db = st.db.clone();
+    let groups = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<_>> {
+        let conn = db.open()?;
+        crate::dupes::find(&conn)
+    })
+    .await??;
+    Ok(Json(groups))
+}
+
+#[derive(serde::Deserialize)]
+struct MergeBody {
+    kind: String,
+    keep: i64,
+    merge: i64,
+}
+
+async fn merge_duplicate(
+    State(st): State<AppState>,
+    Json(body): Json<MergeBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db = st.db.clone();
+    let ok = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let conn = db.open()?;
+        crate::dupes::merge(&conn, &body.kind, body.keep, body.merge)
+    })
+    .await??;
+    if !ok {
+        return Err(ApiError::not_found("нечего сливать"));
+    }
+    Ok(Json(json!({ "ok": true })))
 }
 
 #[derive(serde::Deserialize)]

@@ -3,6 +3,7 @@ pub mod loudness;
 pub mod auth;
 pub mod daily;
 pub mod db;
+pub mod dupes;
 pub mod derive;
 pub mod features;
 pub mod index;

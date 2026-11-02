@@ -6,6 +6,7 @@ import '../design/tokens.dart';
 import '../design/badges.dart';
 import '../screens/playlists.dart';
 import '../player/controller.dart';
+import '../player/downloads.dart';
 import '../player/likes.dart';
 
 /// The one place a track can be interrogated: what it is, what it plays from,
@@ -206,6 +207,27 @@ class _TrackSheetState extends State<_TrackSheet> {
                   if (!context.mounted) return;
                   Navigator.of(context).pop();
                   widget.onRemoved?.call();
+                },
+              ),
+            if (DownloadsScope.maybeOf(context) case final dl?)
+              _Item(
+                icon: dl.has(t.id)
+                    ? Icons.delete_outline_rounded
+                    : dl.isDownloading(t.id)
+                    ? Icons.downloading_rounded
+                    : Icons.download_rounded,
+                label: dl.has(t.id)
+                    ? 'удалить с устройства'
+                    : dl.isDownloading(t.id)
+                    ? 'скачивается · ${(dl.progressOf(t.id) * 100).round()}%'
+                    : 'скачать · ${dl.defaultQuality == 'flac' ? 'flac' : 'opus 128'}',
+                onTap: () async {
+                  if (dl.has(t.id)) {
+                    await dl.remove(t.id);
+                  } else {
+                    dl.enqueue(t, quality: dl.defaultQuality);
+                  }
+                  if (context.mounted) Navigator.of(context).pop();
                 },
               ),
             _Item(
