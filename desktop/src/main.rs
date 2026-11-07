@@ -12,7 +12,7 @@ pub mod wave;
 use std::borrow::Cow;
 
 use gpui::{
-    App, Application, AppContext as _, AssetSource, Bounds, SharedString, TitlebarOptions, WindowBounds,
+    App, Application, AppContext as _, WindowBackgroundAppearance, AssetSource, Bounds, SharedString, TitlebarOptions, WindowBounds,
     WindowDecorations, WindowOptions, point, px, size,
 };
 
@@ -56,7 +56,13 @@ fn main() {
                 appears_transparent: true,
                 traffic_light_position: None,
             }),
-            window_decorations: Some(WindowDecorations::Client),
+            // Server decorations: niri draws its focus ring as a solid slab
+            // behind a client-decorated window, which would hide the desktop we
+            // are trying to show. It paints no titlebar, so this looks frameless.
+            window_decorations: Some(WindowDecorations::Server),
+            // The compositor blurs what is behind the window; everything drawn
+            // on top is translucent glass.
+            window_background: WindowBackgroundAppearance::Blurred,
             app_id: Some("bulba-music".into()),
             window_min_size: Some(size(px(980.), px(620.))),
             ..Default::default()

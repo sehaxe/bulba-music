@@ -70,6 +70,10 @@ fn main() {
         Err(_) => hsla(220.0 / 360.0, 0.3, 0.5, 0.35),
     };
     let stripes = std::env::var("GLASS_STRIPES").is_ok();
+    let decorations = match std::env::var("GLASS_DECOR").as_deref() {
+        Ok("server") => WindowDecorations::Server,
+        _ => WindowDecorations::Client,
+    };
     let bg = match std::env::var("GLASS_ALPHA") {
         Ok(a) => gpui::Hsla {
             a: a.parse().expect("GLASS_ALPHA wants f32"),
@@ -78,7 +82,7 @@ fn main() {
         Err(_) => bg,
     };
     println!(
-        "glass_probe: window_background = {variant:?}, stripes = {stripes}, bg = {bg:?} -> {:?}",
+        "glass_probe: window_background = {variant:?}, decorations = {decorations:?}, stripes = {stripes}, bg = {bg:?} -> {:?}",
         gpui::Rgba::from(bg)
     );
     Application::new().run(move |cx: &mut App| {
@@ -87,7 +91,7 @@ fn main() {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 app_id: Some("glass-probe".into()),
-                window_decorations: Some(WindowDecorations::Client),
+                window_decorations: Some(decorations),
                 window_background: variant,
                 ..Default::default()
             },

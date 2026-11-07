@@ -77,7 +77,28 @@ impl Default for Covers {
 /// falls back to its own encoder if it cannot make one, and webp is the safety
 /// net.
 pub fn load(api: &Api, album_id: i64, title: &str) -> Option<Art> {
-    match api.get_bytes(&format!("/api/albums/{album_id}/cover?w=512&fmt=jxl")) {
+    load_cover(api, album_id, title, false)
+}
+
+/// `hi` is the room's own copy: JPEG XL at 768 px, fetched once per record.
+/// The grid deliberately does not use it — jxl-oxide needs about a second for a
+/// 512 px cover, which is fine for one wallpaper and hopeless for forty tiles.
+pub fn load_cover(api: &Api, album_id: i64, title: &str, hi: bool) -> Option<Art> {
+    let started = std::time::Instant::now();
+    let out = load_inner(api, album_id, title, hi);
+    if std::env::var("BULBA_COVER_LOG").is_ok() {
+        eprintln!("[cover] {album_id} {:?}", started.elapsed());
+    }
+    out
+}
+
+fn load_inner(api: &Api, album_id: i64, title: &str, hi: bool) -> Option<Art> {
+    let url = if hi {
+        format!("/api/albums/{album_id}/cover?w=768&fmt=jxl")
+    } else {
+        format!("/api/albums/{album_id}/cover?w=512")
+    };
+    match api.get_bytes(&url) {
         Ok(bytes) => from_bytes(&bytes).or_else(|| {
             api.get_bytes(&format!("/api/albums/{album_id}/cover?w=512"))
                 .ok()

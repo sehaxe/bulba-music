@@ -72,6 +72,9 @@ pub struct Root {
     grain: Option<Arc<gpui::RenderImage>>,
     vignette: Option<Arc<gpui::RenderImage>>,
     glow: Option<(i32, Arc<gpui::RenderImage>)>,
+    /// Set every frame from the real viewport: the hero shows a track list only
+    /// when there is room for it, instead of squeezing the title.
+    wide: bool,
 }
 
 impl Root {
@@ -128,6 +131,7 @@ impl Root {
             grain: None,
             vignette: None,
             glow: None,
+            wide: true,
         };
         // Results arrive on the Search entity; the shell has to repaint when
         // they do, or the field shows a new query over an old answer.
@@ -337,7 +341,7 @@ impl Root {
         cx.spawn(async move |this, cx| {
             let art = cx
                 .background_executor()
-                .spawn(async move { crate::covers::load(&api, album_id, &title) })
+                .spawn(async move { crate::covers::load_cover(&api, album_id, &title, true) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.covers.finish(album_id, art);
@@ -614,7 +618,6 @@ impl Root {
             .absolute()
             .inset_0()
             .overflow_hidden()
-            .bg(p.canvas)
             .child(match art {
                 Some(art) => div()
                     .absolute()
@@ -622,7 +625,8 @@ impl Root {
                     .child(
                         img(art.backdrop.clone())
                             .size_full()
-                            .object_fit(ObjectFit::Cover),
+                            .object_fit(ObjectFit::Cover)
+                            .opacity(if p.light { 0.40 } else { 0.50 }),
                     )
                     .with_animation(
                         SharedString::from(format!("room-{}", art.hue as i32)),
@@ -1065,7 +1069,6 @@ impl Root {
                             )
                             .child(
                                 div()
-                                    .pt(px(14.))
                                     .flex()
                                     .items_center()
                                     .gap(px(10.))
@@ -1096,8 +1099,71 @@ impl Root {
                                         }),
                                     )),
                             ),
-                    ),
+                    )
+                    .when(self.wide && tracks.len() > 1, |el| {
+                        el.child(self.hero_tracks(album_id, &tracks, cx))
+                    }),
             )
+    }
+
+    /// The album's first tracks, as a column of quiet rows inside the hero.
+    /// It is the one thing a person wants from an album card that a giant title
+    /// does not give them: track two.
+    fn hero_tracks(
+        &self,
+        album_id: i64,
+        tracks: &[Track],
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let p = self.palette;
+        let mut list = div()
+            .w(px(320.))
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .gap(px(1.))
+            .pb(px(4.));
+        for (i, t) in tracks.iter().take(6).enumerate() {
+            let id = t.id;
+            let playing = self.snap.track.as_ref().map(|x| x.id) == Some(id);
+            list = list.child(
+                div()
+                    .id(SharedString::from(format!("hero-track-{id}")))
+                    .h(px(30.))
+                    .px(px(8.))
+                    .rounded(px(7.))
+                    .flex()
+                    .items_center()
+                    .gap(px(9.))
+                    .when(playing, |el| el.bg(p.card))
+                    .hover(|el| el.bg(p.card_hover))
+                    .child(
+                        div()
+                            .w(px(14.))
+                            .text_size(px(10.))
+                            .text_color(if playing { p.accent } else { p.ash })
+                            .child(format!("{:02}", i + 1)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(11.5))
+                            .text_color(if playing { p.accent } else { p.body })
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(t.title.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(p.ash)
+                            .child(fmt_duration(t.duration())),
+                    )
+                    .on_click(cx.listener(move |this, _, _, _| this.play_album(album_id, i))),
+            );
+        }
+        list
     }
 
     fn section_title(&self, title: &str, action: Option<&str>) -> impl IntoElement {
@@ -1423,7 +1489,10 @@ impl Root {
             .h(px(34.))
             .px(px(14.))
             .rounded(px(999.))
-            .when(primary, |el| el.bg(p.accent))
+            // The primary action is the loudest thing on the screen, so it is
+            // plain ink rather than the cover's accent: the accent belongs to
+            // the record, not to a button.
+            .when(primary, |el| el.bg(p.ink))
             .when(!primary, |el| {
                 el.bg(p.card).border_1().border_color(p.hairline)
             })
@@ -1767,13 +1836,14 @@ impl Root {
 }
 
 impl Render for Root {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.wide = f32::from(window.viewport_size().width) >= 1180.0;
         let p = self.palette;
         div()
             .size_full()
             .relative()
             .overflow_hidden()
-            .bg(p.canvas)
+            .bg(p.canvas.opacity(if p.light { 0.50 } else { 0.34 }))
             .font_family(FONT)
             .text_color(p.ink)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {

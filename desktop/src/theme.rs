@@ -42,6 +42,9 @@ impl Default for Palette {
 
 impl Palette {
     pub fn from_art(hue: f32, sat: f32, lum: f32) -> Self {
+        // gpui's Hsla takes hue in 0..1, not degrees. Passing 214.0 clamped to
+        // 1.0, which is why every cover used to light a red room.
+        let hue = hue.rem_euclid(360.0) / 360.0;
         let sat = sat.clamp(0.0, 1.0);
         // A grey cover must not produce a grey accent, and a neon one must not
         // produce an eye-searing panel. Both are clamped into a usable band.
@@ -94,14 +97,14 @@ impl Palette {
         if self.light {
             linear_gradient(
                 180.0,
-                linear_color_stop(self.canvas.opacity(0.42), 0.0),
-                linear_color_stop(self.canvas.opacity(0.93), 1.0),
+                linear_color_stop(self.canvas.opacity(0.12), 0.0),
+                linear_color_stop(self.canvas.opacity(0.82), 1.0),
             )
         } else {
             linear_gradient(
                 180.0,
-                linear_color_stop(self.canvas.opacity(0.30), 0.0),
-                linear_color_stop(self.canvas.opacity(0.97), 1.0),
+                linear_color_stop(self.canvas.opacity(0.10), 0.0),
+                linear_color_stop(self.canvas.opacity(0.88), 1.0),
             )
         }
     }
