@@ -215,6 +215,18 @@ impl Root {
                     let list = this.album_tracks(track.album_id);
                     let index = list.iter().position(|t| t.id == track_id).unwrap_or(0);
                     this.audio.play(list, index);
+                    if let Ok(seek) = std::env::var("BULBA_SEEK")
+                        && let Ok(secs) = seek.parse::<f64>()
+                    {
+                        let audio = this.audio.clone();
+                        cx.spawn(async move |_, cx| {
+                            cx.background_executor()
+                                .timer(Duration::from_millis(1500))
+                                .await;
+                            audio.seek(Duration::from_secs_f64(secs));
+                        })
+                        .detach();
+                    }
                 }
                 cx.notify();
                 this.load_art(cx);
