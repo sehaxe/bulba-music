@@ -188,12 +188,13 @@ fn prefetch(cache: &Arc<Cache>, t: &Track) {
 
 struct Deck {
     player: Player,
-    offset: Duration,
 }
 
 impl Deck {
+    /// rodio's own position is already absolute: `try_seek` moves it. Adding an
+    /// offset here doubled every seek and made the track look finished.
     fn position(&self) -> Duration {
-        self.offset + self.player.get_pos()
+        self.player.get_pos()
     }
 }
 
@@ -259,6 +260,14 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
     let mut last_tick = Instant::now();
     let mut cursor = Cursor::Idle;
 
+    let stop_both = |decks: &mut [Option<Deck>; 2]| {
+        for slot in decks.iter_mut() {
+            if let Some(deck) = slot.take() {
+                deck.player.stop();
+            }
+        }
+    };
+
     let load = |track: &Track, from: Duration| -> anyhow::Result<Deck> {
         let path = cache.ensure(track)?;
         let source = crate::track_source::open(&path, track.duration())?;
@@ -268,10 +277,7 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
         if from > Duration::ZERO {
             let _ = player.try_seek(from);
         }
-        Ok(Deck {
-            player,
-            offset: from,
-        })
+        Ok(Deck { player })
     };
 
     loop {
@@ -286,9 +292,7 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
                     blend = None;
                     playing = true;
                     cursor = Cursor::Idle;
-                    if let Some(d) = decks[active].take() {
-                        d.player.stop();
-                    }
+                    stop_both(&mut decks);
                     if let Some(track) = queue.get(index).cloned() {
                         loading = true;
                         error = None;
@@ -317,24 +321,44 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
                     }
                 }
                 Cmd::Toggle => {
-                    if let Some(deck) = decks[active].as_ref() {
-                        if playing {
-                            deck.player.pause();
-                        } else {
-                            deck.player.play();
+                    if decks[active].is_none() {
+                        // The last track finished and took its deck with it; the
+                        // play button must start it again rather than do nothing.
+                        if let Some(track) = queue.get(index).cloned()
+                            && let Ok(deck) = load(&track, Duration::ZERO)
+                        {
+                            decks[active] = Some(deck);
+                            playing = true;
+                            cursor = Cursor::Idle;
+                        }
+                    } else {
+                        for deck in decks.iter().flatten() {
+                            if playing {
+                                deck.player.pause();
+                            } else {
+                                deck.player.play();
+                            }
                         }
                         playing = !playing;
                     }
                 }
                 Cmd::SetPlaying(on) => {
-                    if let Some(deck) = decks[active].as_ref() {
+                    if decks[active].is_none() && on {
+                        if let Some(track) = queue.get(index).cloned()
+                            && let Ok(deck) = load(&track, Duration::ZERO)
+                        {
+                            decks[active] = Some(deck);
+                            cursor = Cursor::Idle;
+                        }
+                    }
+                    for deck in decks.iter().flatten() {
                         if on {
                             deck.player.play();
                         } else {
                             deck.player.pause();
                         }
-                        playing = on;
                     }
+                    playing = on;
                 }
                 Cmd::Next => {
                     if index + 1 < queue.len() {
@@ -348,11 +372,12 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
                         index += 1;
                         blend = None;
                         cursor = Cursor::Idle;
-                        if let Some(d) = decks[active].take() {
-                            d.player.stop();
-                        }
+                        stop_both(&mut decks);
                         if let Some(track) = queue.get(index).cloned() {
                             if let Ok(deck) = load(&track, Duration::ZERO) {
+                                if !playing {
+                                    deck.player.pause();
+                                }
                                 decks[active] = Some(deck);
                             }
                         }
@@ -362,11 +387,12 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
                     index = index.saturating_sub(1);
                     blend = None;
                     cursor = Cursor::Idle;
-                    if let Some(d) = decks[active].take() {
-                        d.player.stop();
-                    }
+                    stop_both(&mut decks);
                     if let Some(track) = queue.get(index).cloned() {
                         if let Ok(deck) = load(&track, Duration::ZERO) {
+                            if !playing {
+                                deck.player.pause();
+                            }
                             decks[active] = Some(deck);
                         }
                     }
@@ -374,14 +400,11 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
                 Cmd::Seek(to) => {
                     if let Some(deck) = decks[active].as_mut() {
                         let _ = deck.player.try_seek(to);
-                        deck.offset = to;
                     }
                 }
                 Cmd::Volume(v) => volume = v.clamp(0.0, 1.0),
                 Cmd::Stop => {
-                    if let Some(d) = decks[active].take() {
-                        d.player.stop();
-                    }
+                    stop_both(&mut decks);
                     playing = false;
                     queue.clear();
                     index = 0;
@@ -421,6 +444,9 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
                 if let Some(old) = decks[other].take() {
                     old.player.stop();
                 }
+                if !playing {
+                    deck.player.pause();
+                }
                 decks[other] = Some(deck);
                 blend = Some(0.0);
             }
@@ -438,6 +464,9 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
                 b.player.set_volume(volume * angle.sin());
             }
             if p >= 1.0 {
+                if let Some(t) = current.as_ref() {
+                    signal(&api, t, PLAY_END, t.duration(), session);
+                }
                 if let Some(a) = decks[active].take() {
                     a.player.stop();
                 }
@@ -450,6 +479,9 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
                 }
             }
         } else if decks[active].is_some() && remaining.is_zero() && audible {
+            if let Some(t) = current.as_ref() {
+                signal(&api, t, PLAY_END, t.duration(), session);
+            }
             if let Some(a) = decks[active].take() {
                 a.player.stop();
             }
@@ -522,8 +554,13 @@ fn signal(api: &Api, track: &Track, event: i64, position: Duration, session: i64
             "quality": if track.codec.as_deref() == Some("flac") { 0 } else { 1 },
             "client_id": "gpui-desktop",
         }]);
+        // Every call inserts a row: retrying a success would triple the play
+        // count, the skip rate and the taste model.
         for attempt in 0..3 {
-            let _: anyhow::Result<serde_json::Value> = api.post("/api/events", &ev);
+            let sent: anyhow::Result<serde_json::Value> = api.post("/api/events", &ev);
+            if sent.is_ok() {
+                break;
+            }
             if attempt < 2 {
                 std::thread::sleep(Duration::from_millis(800));
             }

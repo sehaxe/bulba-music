@@ -56,6 +56,7 @@ pub fn render(
     wave: &Wave,
     p: Palette,
     playing: Option<i64>,
+    covers: impl Fn(i64) -> Option<std::sync::Arc<gpui::RenderImage>> + Clone + 'static,
     on_play: impl Fn(i64) + Clone + 'static,
     on_open_album: impl Fn(i64) + Clone + 'static,
 ) -> impl IntoElement {
@@ -69,6 +70,7 @@ pub fn render(
         let is_playing = playing == Some(id);
         let play = on_play.clone();
         let open_album = on_open_album.clone();
+        let cover = covers(album_id);
         let reason = clamp_reason(&item.reason);
         let key = track
             .camelot
@@ -106,6 +108,13 @@ pub fn render(
                         .bg(p.card)
                         .cursor_pointer()
                         .hover(|el| el.opacity(0.82))
+                        .child(match cover {
+                            Some(art) => gpui::img(gpui::ImageSource::Render(art))
+                                .size_full()
+                                .object_fit(gpui::ObjectFit::Cover)
+                                .into_any_element(),
+                            None => gpui::div().size_full().into_any_element(),
+                        })
                         .child(
                             div()
                                 .absolute()

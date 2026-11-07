@@ -2,6 +2,7 @@
 
 use std::cell::Cell;
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -14,6 +15,7 @@ use gpui::{
 use crate::api::{AlbumPage, Api, Track};
 use crate::audio::{self, Audio};
 use crate::covers::Covers;
+use crate::fx;
 use crate::theme::{FONT, Palette};
 use crate::mpris::Mpris;
 use crate::search;
@@ -67,6 +69,9 @@ pub struct Root {
     nav_rx: std::sync::mpsc::Receiver<i64>,
     search: Entity<search::Search>,
     mpris: Option<Mpris>,
+    grain: Option<Arc<gpui::RenderImage>>,
+    vignette: Option<Arc<gpui::RenderImage>>,
+    glow: Option<(i32, Arc<gpui::RenderImage>)>,
 }
 
 impl Root {
@@ -120,6 +125,9 @@ impl Root {
             nav_rx: nav.1,
             search,
             mpris,
+            grain: None,
+            vignette: None,
+            glow: None,
         };
         // Results arrive on the Search entity; the shell has to repaint when
         // they do, or the field shows a new query over an old answer.
@@ -139,6 +147,13 @@ impl Root {
         if this.tab == Tab::Wave {
             this.ensure_wave(cx);
         }
+        let seed = Palette::default();
+        this.glow = Some((
+            (seed.accent.h * 360.0).round() as i32,
+            fx::glow(512, seed.accent.h * 360.0, 0.4, 0.55),
+        ));
+        this.vignette = Some(fx::vignette(512, 0.62));
+        this.grain = Some(fx::grain(1024, 0.09, 0x5eed));
         this.load(cx);
         this.ticker(cx);
         this
@@ -180,6 +195,16 @@ impl Root {
                     this.room = Some(id);
                     this.ensure_art(id, cx);
                 }
+                if let Ok(q) = std::env::var("BULBA_SEARCH")
+                    && !q.trim().is_empty()
+                {
+                    let api = this.api.clone();
+                    let search = this.search.clone();
+                    let _ = search.update(cx, |s, cx| {
+                        s.query = q;
+                        s.run(&api, cx);
+                    });
+                }
                 if let Some(track_id) = this.boot_play
                     && let Some(track) = this.tracks.iter().find(|t| t.id == track_id).cloned()
                 {
@@ -205,26 +230,39 @@ impl Root {
             .iter()
             .map(|a| (a.id, a.title.clone()))
             .collect();
-        cx.spawn(async move |this, cx| {
-            for (id, title) in wanted {
-                let begin = this
-                    .update(cx, |this, _| this.covers.begin(id))
-                    .unwrap_or(false);
-                if !begin {
-                    continue;
+        // Four lanes, not one queue: the server encodes each JXL on first
+        // request, and a strictly sequential pass left half the grid grey for
+        // ten seconds on a 49-album library.
+        for lane in 0..4usize {
+            let api = api.clone();
+            let wanted: Vec<(i64, String)> = wanted
+                .iter()
+                .skip(lane)
+                .step_by(4)
+                .cloned()
+                .collect();
+            cx.spawn(async move |this, cx| {
+                for (id, title) in wanted {
+                    let begin = this
+                        .update(cx, |this, _| this.covers.begin(id))
+                        .unwrap_or(false);
+                    if !begin {
+                        continue;
+                    }
+                    let api = api.clone();
+                    let art = cx
+                        .background_executor()
+                        .spawn(async move { crate::covers::load(&api, id, &title) })
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        this.covers.finish(id, art);
+                        this.refit_room(id);
+                        cx.notify();
+                    });
                 }
-                let api = api.clone();
-                let art = cx
-                    .background_executor()
-                    .spawn(async move { crate::covers::load(&api, id, &title) })
-                    .await;
-                let _ = this.update(cx, |this, cx| {
-                    this.covers.finish(id, art);
-                    cx.notify();
-                });
-            }
-        })
-        .detach();
+            })
+            .detach();
+        }
     }
 
     fn ticker(&mut self, cx: &mut Context<Self>) {
@@ -236,22 +274,30 @@ impl Root {
                 let alive = this.update(cx, |this, cx| {
                     this.frame += 1;
                     this.drain_nav(cx);
-                    if let (Some(mpris), Some(track)) = (&this.mpris, this.snap.track.as_ref()) {
-                        mpris.set(
-                            Some(track),
-                            this.snap.playing,
-                            this.snap.position.as_secs_f64(),
-                            this.snap.volume as f64,
-                        );
-                    }
                     let snap = this.audio.snapshot();
-                    let changed = snap.track.as_ref().map(|t| t.id) != this.snap.track.as_ref().map(|t| t.id)
-                        || snap.playing != this.snap.playing
-                        || snap
-                            .position
-                            .abs_diff(this.snap.position)
-                            > Duration::from_millis(120);
+                    let track_changed =
+                        snap.track.as_ref().map(|t| t.id) != this.snap.track.as_ref().map(|t| t.id);
+                    let play_changed = snap.playing != this.snap.playing;
+                    let volume_changed = (snap.volume - this.snap.volume).abs() > 0.001;
+                    // The ticker itself runs every 100 ms, so a 120 ms threshold
+                    // could never fire: the bar would freeze until something else
+                    // repainted it.
+                    let moved = snap.position.abs_diff(this.snap.position)
+                        > Duration::from_millis(45);
                     this.snap = snap;
+                    let changed = track_changed || play_changed || volume_changed || moved;
+                    // MPRIS interpolates position itself; pushing ten times a
+                    // second only makes the bus shout.
+                    if track_changed || play_changed || volume_changed {
+                        if let (Some(mpris), snapshot) = (&this.mpris, &this.snap) {
+                            mpris.set(
+                                snapshot.track.as_ref(),
+                                snapshot.playing,
+                                snapshot.position.as_secs_f64(),
+                                snapshot.volume as f64,
+                            );
+                        }
+                    }
                     if changed {
                         cx.notify();
                     }
@@ -272,6 +318,12 @@ impl Root {
     }
 
     fn ensure_art(&mut self, album_id: i64, cx: &mut Context<Self>) {
+        // Cached art still has to re-tint the room: `begin` refuses an album it
+        // already has, which used to leave the palette from the previous record.
+        if self.covers.get(album_id).is_some() {
+            self.refit_room(album_id);
+            return;
+        }
         if !self.covers.begin(album_id) {
             return;
         }
@@ -289,15 +341,35 @@ impl Root {
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.covers.finish(album_id, art);
-                if this.room == Some(album_id)
-                    && let Some(art) = this.covers.get(album_id)
-                {
-                    this.palette = Palette::from_art(art.hue, art.sat, art.lum);
-                }
+                this.refit_room(album_id);
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// The room is lit by whichever cover is playing. Called both when art
+    /// arrives lazily and when the playing track changes, because either can be
+    /// the first to know.
+    fn refit_room(&mut self, album_id: i64) {
+        if self.room != Some(album_id) {
+            return;
+        }
+        if let Some(art) = self.covers.get(album_id) {
+            self.palette = Palette::from_art(art.hue, art.sat, art.lum);
+            let hue = art.hue.round() as i32;
+            self.glow = Some((hue, fx::glow(512, art.hue, art.sat.max(0.35), 0.55)));
+        }
+    }
+
+    /// A baked radial light in the current accent, cached per hue: GPUI has no
+    /// shaders, so the glow behind the record is a texture, not a blur.
+    fn glow_for(&self, p: Palette) -> Option<Arc<gpui::RenderImage>> {
+        let hue = (p.accent.h * 360.0).round() as i32;
+        self.glow
+            .as_ref()
+            .filter(|(h, _)| *h == hue)
+            .map(|(_, image)| image.clone())
     }
 
     fn set_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
@@ -426,7 +498,17 @@ impl Root {
             .flex_col()
             .gap(px(18.))
             .pt(px(10.))
-            .child(wave::render(&self.wave, p, playing, on_play, on_open))
+            .child(wave::render(
+                &self.wave,
+                p,
+                playing,
+                {
+                    let covers = self.covers.cache.clone();
+                    move |album_id| covers.get(&album_id).map(|a| a.cover.clone())
+                },
+                on_play,
+                on_open,
+            ))
             .child(
                 div()
                     .flex()
@@ -512,7 +594,7 @@ impl Root {
         cx.notify();
     }
 
-    fn toggle_mute(&mut self) {
+    fn toggle_mute(&mut self, cx: &mut Context<Self>) {
         match self.muted.take() {
             Some(v) => self.audio.set_volume(v),
             None => {
@@ -520,6 +602,7 @@ impl Root {
                 self.audio.set_volume(0.0);
             }
         }
+        cx.notify();
     }
 
     // ---------------------------------------------------------------- visuals
@@ -550,6 +633,25 @@ impl Root {
                 None => div().into_any_element(),
             })
             .child(div().absolute().inset_0().bg(p.scrim()))
+            .child(match &self.vignette {
+                Some(v) => img(v.clone())
+                    .absolute()
+                    .inset_0()
+                    .size_full()
+                    .object_fit(ObjectFit::Fill)
+                    .into_any_element(),
+                None => div().into_any_element(),
+            })
+            .child(match &self.grain {
+                Some(g) => img(g.clone())
+                    .absolute()
+                    .inset_0()
+                    .size_full()
+                    .object_fit(ObjectFit::Fill)
+                    .opacity(if p.light { 0.30 } else { 0.65 })
+                    .into_any_element(),
+                None => div().into_any_element(),
+            })
     }
 
     fn rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -574,7 +676,7 @@ impl Root {
                         svg()
                             .path(asset(icon_name))
                             .size(px(19.))
-                            .text_color(if active { p.accent } else { p.mute }),
+                            .text_color(if active { p.accent } else { p.icon }),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| this.set_tab(tab, cx))),
             );
@@ -608,24 +710,6 @@ impl Root {
             )
             .children(items)
             .child(div().flex_1())
-            .child(
-                div()
-                    .id("quit")
-                    .w(px(42.))
-                    .h(px(42.))
-                    .rounded(px(12.))
-                    .hover(|el| el.bg(p.card_hover))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        svg()
-                            .path(asset("close"))
-                            .size(px(16.))
-                            .text_color(p.ash),
-                    )
-                    .on_click(cx.listener(|_, _, _, cx| cx.quit())),
-            )
     }
 
     fn titlebar(&self) -> impl IntoElement {
@@ -645,34 +729,32 @@ impl Root {
                     .child(
                         div()
                             .text_size(px(11.))
-                            .text_color(p.ash)
+                            .text_color(p.mute)
                             .child("bulba music"),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
-                            .text_color(p.ash.opacity(0.6))
-                            .child("·"),
+                            .size(px(3.))
+                            .rounded(px(999.))
+                            .bg(if self.error.is_some() { gpui::red() } else { p.accent }),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
-                            .text_color(if self.error.is_some() {
-                                gpui::red()
-                            } else {
-                                p.ash.opacity(0.8)
-                            })
-                            .child(if self.error.is_some() {
-                                "нет связи"
-                            } else {
-                                "ло"
-                            }),
+                            .text_size(px(10.5))
+                            .text_color(p.mute.opacity(0.9))
+                            .child(
+                                self.api
+                                    .base
+                                    .trim_start_matches("http://")
+                                    .trim_start_matches("https://")
+                                    .to_string(),
+                            ),
                     ),
             )
             .child(
                 div()
                     .text_size(px(11.))
-                    .text_color(p.ash.opacity(0.7))
+                    .text_color(p.mute.opacity(0.85))
                     .child(format!("{} треков · {} альбомов", self.tracks.len(), self.albums.len())),
             )
             .on_mouse_down(MouseButton::Left, |_, window, _| {
@@ -873,9 +955,19 @@ impl Root {
                     .bg(gpui::linear_gradient(
                         70.0,
                         gpui::linear_color_stop(p.canvas.opacity(0.05), 0.0),
-                        gpui::linear_color_stop(p.canvas.opacity(0.92), 1.0),
+                        gpui::linear_color_stop(p.canvas.opacity(if p.light { 0.80 } else { 0.92 }), 1.0),
                     )),
             )
+            .child(match self.glow_for(p) {
+                Some(g) => div()
+                    .absolute()
+                    .left(px(-60.))
+                    .bottom(px(-120.))
+                    .size(px(520.))
+                    .child(img(g).size_full().object_fit(ObjectFit::Contain))
+                    .into_any_element(),
+                None => div().into_any_element(),
+            })
             .child(
                 div()
                     .relative()
@@ -1057,7 +1149,10 @@ impl Root {
                             .size_full()
                             .object_fit(ObjectFit::Cover)
                             .into_any_element(),
-                        None => div().size_full().bg(p.card_hover).into_any_element(),
+                        None => div()
+                            .size_full()
+                            .bg(p.canvas)
+                            .into_any_element(),
                     }),
             )
             .child(
@@ -1175,7 +1270,7 @@ impl Root {
                                     .path(asset("chevron"))
                                     .size(px(13.))
                                     .text_color(p.mute)
-                                    .with_transformation(Transformation::rotate(gpui::percentage(-0.25))),
+                                    .with_transformation(Transformation::rotate(gpui::percentage(0.75))),
                             )
                             .child(div().text_size(px(12.)).text_color(p.mute).child("назад"))
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1214,6 +1309,7 @@ impl Root {
                         div()
                             .flex()
                             .flex_col()
+                            .items_start()
                             .gap(px(8.))
                             .pb(px(6.))
                             .child(
@@ -1226,6 +1322,7 @@ impl Root {
                             .child(
                                 div()
                                     .pt(px(8.))
+                                    .flex()
                                     .child(self.pill(
                                         "play",
                                         "играть",
@@ -1373,7 +1470,7 @@ impl Root {
                 .h(px(84.))
                 .w_full()
                 .rounded(px(20.))
-                .bg(p.card)
+                .bg(p.bar)
                 .border_1()
                 .border_color(p.hairline)
                 .shadow(vec![BoxShadow {
@@ -1514,7 +1611,7 @@ impl Root {
                                             p.mute
                                         }),
                                 )
-                                .on_click(cx.listener(|this, _, _, _| this.toggle_mute())),
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_mute(cx))),
                         )
                         .child(
                             div()

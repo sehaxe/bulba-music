@@ -24,11 +24,19 @@ pub struct Palette {
     pub shadow: Hsla,
     /// How much to brighten the faded backdrop.
     pub veil: f32,
+    /// Icons sit between ink and mute: loud enough to find, quiet enough to ignore.
+    pub icon: Hsla,
+    /// The player bar's surface: the one panel that must stay readable over any
+    /// cover, so it is more solid than the cards.
+    pub bar: Hsla,
+    /// A bright record opens a bright room. The whole interface flips with the
+    /// cover, the way a photo viewer dims around a dark picture.
+    pub light: bool,
 }
 
 impl Default for Palette {
     fn default() -> Self {
-        Self::from_art(24.0, 0.35, 0.5)
+        Self::from_art(24.0, 0.35, 0.22)
     }
 }
 
@@ -38,6 +46,27 @@ impl Palette {
         // A grey cover must not produce a grey accent, and a neon one must not
         // produce an eye-searing panel. Both are clamped into a usable band.
         let chroma = sat.clamp(0.28, 1.0);
+        if lum > 0.46 {
+            let accent = hsla(hue, (chroma * 0.95).clamp(0.35, 0.90), 0.40, 1.0);
+            return Self {
+                canvas: hsla(hue, (sat * 0.22).clamp(0.02, 0.10), 0.94, 1.0),
+                ink: hsla(hue, 0.22, 0.10, 1.0),
+                body: hsla(hue, 0.14, 0.22, 1.0),
+                mute: hsla(hue, 0.10, 0.38, 1.0),
+                ash: hsla(hue, 0.07, 0.54, 1.0),
+                hairline: hsla(hue, 0.35, 0.10, 0.16),
+                hairline_soft: hsla(hue, 0.35, 0.10, 0.08),
+                card: hsla(hue, 0.35, 1.0, 0.66),
+                card_hover: hsla(hue, 0.35, 1.0, 0.86),
+                icon: hsla(hue, 0.14, 0.24, 1.0),
+                bar: hsla(hue, 0.30, 1.0, 0.78),
+                accent,
+                accent_soft: accent.opacity(0.14),
+                shadow: hsla(hue, 0.25, 0.15, 0.18),
+                veil: 0.0,
+                light: true,
+            };
+        }
         let accent = hsla(hue, (chroma * 0.95).clamp(0.30, 0.92), 0.66, 1.0);
         Self {
             canvas: hsla(hue, (sat * 0.30).clamp(0.03, 0.16), 0.045, 1.0),
@@ -49,21 +78,32 @@ impl Palette {
             hairline_soft: hsla(hue, 0.20, 1.0, 0.06),
             card: hsla(hue, 0.22, 1.0, 0.045),
             card_hover: hsla(hue, 0.22, 1.0, 0.085),
+            icon: hsla(hue, 0.04, 0.68, 1.0),
+            bar: hsla(hue, 0.20, 1.0, 0.05),
             accent,
             accent_soft: accent.opacity(0.16),
             shadow: hsla(0.0, 0.0, 0.0, 0.55),
             veil: (lum - 0.35).clamp(-0.2, 0.3),
+            light: false,
         }
     }
 
     /// The vertical wash that turns a blurred cover into a room: dark at the
     /// edges, a little lighter behind the record.
     pub fn scrim(&self) -> Background {
-        linear_gradient(
-            180.0,
-            linear_color_stop(self.canvas.opacity(0.30), 0.0),
-            linear_color_stop(self.canvas.opacity(0.97), 1.0),
-        )
+        if self.light {
+            linear_gradient(
+                180.0,
+                linear_color_stop(self.canvas.opacity(0.42), 0.0),
+                linear_color_stop(self.canvas.opacity(0.93), 1.0),
+            )
+        } else {
+            linear_gradient(
+                180.0,
+                linear_color_stop(self.canvas.opacity(0.30), 0.0),
+                linear_color_stop(self.canvas.opacity(0.97), 1.0),
+            )
+        }
     }
 
     pub fn glow(&self) -> Background {

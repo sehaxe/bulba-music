@@ -77,13 +77,18 @@ impl Default for Covers {
 /// falls back to its own encoder if it cannot make one, and webp is the safety
 /// net.
 pub fn load(api: &Api, album_id: i64, title: &str) -> Option<Art> {
-    match api.get_bytes(&format!("/api/albums/{album_id}/cover?w=768&fmt=jxl")) {
+    match api.get_bytes(&format!("/api/albums/{album_id}/cover?w=512&fmt=jxl")) {
         Ok(bytes) => from_bytes(&bytes).or_else(|| {
             api.get_bytes(&format!("/api/albums/{album_id}/cover?w=512"))
                 .ok()
                 .and_then(|webp| from_bytes(&webp))
         }),
-        Err(_) => Some(placeholder(title)),
+        Err(e) => {
+            if std::env::var("BULBA_COVER_LOG").is_ok() {
+                eprintln!("[cover] {album_id}: {e}");
+            }
+            Some(placeholder(title))
+        }
     }
 }
 
@@ -170,7 +175,9 @@ fn to_render(img: &RgbaImage) -> Arc<RenderImage> {
 /// and no per-frame cost.
 fn backdrop(img: &RgbaImage, hue: f32, sat: f32) -> Arc<RenderImage> {
     let small = image::imageops::resize(img, 32, 32, FilterType::Triangle);
-    let mut big = image::imageops::resize(&small, 1024, 1024, FilterType::Lanczos3);
+    // 256 is enough: the GPU stretches it to the window and the scrim covers the
+    // rest. A 1024² texture per album cost ~4 MB each and bought nothing.
+    let mut big = image::imageops::resize(&small, 256, 256, FilterType::Lanczos3);
     // Push the colour harder than the cover has it: a blurred image reads as
     // grey unless the saturation is lifted, and the scrim over it eats the rest.
     let boost = 0.18 + sat * 0.35;
@@ -195,13 +202,16 @@ fn palette(img: &RgbaImage) -> (f32, f32, f32) {
     let mut lum = 0.0f64;
     for px in small.chunks_exact(4) {
         let (h, s, l) = rgb_to_hsl(px[0], px[1], px[2]);
+        // HSL lightness calls pure red "half bright", which would make every
+        // saturated cover a light room. Perceptual luma is what the eye means.
+        let y = (0.2126 * px[0] as f32 + 0.7152 * px[1] as f32 + 0.0722 * px[2] as f32) / 255.0;
         let weight = 0.15 + s as f64 * (1.0 - (l as f64 - 0.5).abs());
         let angle = (h as f64).to_radians();
         sx += angle.cos() * weight;
         sy += angle.sin() * weight;
         sw += weight;
         sat += s as f64 * weight;
-        lum += l as f64;
+        lum += y as f64;
     }
     let n = (24 * 24) as f64;
     if sw <= f64::EPSILON {

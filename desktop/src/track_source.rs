@@ -125,7 +125,7 @@ impl OpusSource {
             let usable = per_channel - skip;
             if usable >= left {
                 let offset = (left + skip) * self.channels as usize;
-                let len = usable * self.channels as usize;
+                let len = (usable - left) * self.channels as usize;
                 self.buf.clear();
                 self.buf
                     .extend_from_slice(&scratch[offset..offset + len]);
