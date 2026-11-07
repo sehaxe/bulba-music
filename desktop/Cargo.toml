@@ -1,0 +1,22 @@
+[package]
+name = "bulba-desktop"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+async-channel = "2"
+gpui = "0.2.2"
+image = { version = "0.25.10", features = ["webp", "jpeg", "png", "gif"] }
+jxl-oxide = "0.12.6"
+libc = "0.2.191"
+mpris-server = "0.11"
+opus-pure = "0.2.3"
+rodio = { version = "0.23.0", features = ["symphonia-flac"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+smallvec = "1.16.5"
+ureq = "3.5.1"
+
+[patch.crates-io]
+xattr = { path = "vendor/xattr" }
