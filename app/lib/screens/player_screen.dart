@@ -235,7 +235,7 @@ class _RoomWash extends StatelessWidget {
         ColoredBox(color: room),
         if (url != null)
           Opacity(
-            opacity: 0.55,
+            opacity: 0.8,
             child: ImageFiltered(
               imageFilter: ImageFilter.blur(sigmaX: 60, sigmaY: 60),
               child: Image.network(url!, fit: BoxFit.cover),
@@ -247,9 +247,9 @@ class _RoomWash extends StatelessWidget {
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: [
-                room.withValues(alpha: 0.55),
-                room.withValues(alpha: 0.86),
-                room,
+                room.withValues(alpha: 0.42),
+                room.withValues(alpha: 0.74),
+                room.withValues(alpha: 0.92),
               ],
               stops: const [0, 0.62, 1],
             ),

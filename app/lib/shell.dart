@@ -8,6 +8,7 @@ import 'cast/cast_sheet.dart';
 import 'cast/cast_store.dart';
 import 'design/accent.dart';
 import 'design/components.dart';
+import 'design/room.dart';
 import 'design/tokens.dart';
 import 'player/controller.dart';
 import 'player/downloads.dart';
@@ -356,7 +357,13 @@ class _ShellState extends State<Shell> {
 
   @override
   Widget build(BuildContext context) {
-    final p = Palette.of(context);
+    // The room is lit by the record that is playing; before anything plays it
+    // is lit by the one the accent was last taken from.
+    final room = Palette.fromArt(_accent);
+    final current = widget.player.current;
+    final artUrl = current == null
+        ? null
+        : widget.api.cover(current.albumId, current.hasCover);
     final size = MediaQuery.sizeOf(context);
     final wide = size.width >= 900;
 
@@ -430,13 +437,17 @@ class _ShellState extends State<Shell> {
         },
         child: AccentScope(
           color: _accent,
-          child: Focus(autofocus: true, child: _scaffold(p, wide)),
+          child: RoomScope(
+            palette: room,
+            artUrl: artUrl,
+            child: Focus(autofocus: true, child: _scaffold(room, artUrl, wide)),
+          ),
         ),
       ),
     );
   }
 
-  Widget _scaffold(Palette p, bool wide) {
+  Widget _scaffold(Palette p, String? artUrl, bool wide) {
     final body = Column(
       children: [
         if (_error != null && !_loading)
@@ -462,55 +473,61 @@ class _ShellState extends State<Shell> {
       ],
     );
     return Scaffold(
-      backgroundColor: p.canvas,
-      body: SafeArea(
-        bottom: !wide,
-        child: Column(
-          children: [
-            Expanded(
-              child: wide
-                  ? Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        NavRail(
-                          index: _tab,
-                          onSelect: _select,
-                          accent: _accent,
-                        ),
-                        Container(width: 1, color: p.hairline),
-                        Expanded(child: body),
-                      ],
-                    )
-                  : body,
+      backgroundColor: Colors.transparent,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          RoomBackdrop(artUrl: artUrl, palette: p),
+          SafeArea(
+            bottom: !wide,
+            child: Column(
+              children: [
+                Expanded(
+                  child: wide
+                      ? Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            NavRail(
+                              index: _tab,
+                              onSelect: _select,
+                              accent: _accent,
+                            ),
+                            Container(width: 1, color: p.hairline),
+                            Expanded(child: body),
+                          ],
+                        )
+                      : body,
+                ),
+                if (widget.player.current != null)
+                  Padding(
+                    padding: EdgeInsets.only(bottom: wide ? 0 : S.xs),
+                    child: PlayerBar(
+                      player: widget.player,
+                      api: widget.api,
+                      likes: widget.likes,
+                      onOpen: _openPlayer,
+                      accent: _accent,
+                      cast: widget.cast,
+                      height: wide ? 68 : 60,
+                      showVolume: wide,
+                    ),
+                  ),
+                if (!wide)
+                  // An opaque strip under the dock: the capsule is translucent, and
+                  // list rows showing through it read as a rendering bug.
+                  Container(
+                    color: p.canvas,
+                    padding: const EdgeInsets.only(top: S.xs),
+                    child: FloatingNav(
+                      index: _tab,
+                      onSelect: _select,
+                      accent: _accent,
+                    ),
+                  ),
+              ],
             ),
-            if (widget.player.current != null)
-              Padding(
-                padding: EdgeInsets.only(bottom: wide ? 0 : S.xs),
-                child: PlayerBar(
-                  player: widget.player,
-                  api: widget.api,
-                  likes: widget.likes,
-                  onOpen: _openPlayer,
-                  accent: _accent,
-                  cast: widget.cast,
-                  height: wide ? 68 : 60,
-                  showVolume: wide,
-                ),
-              ),
-            if (!wide)
-              // An opaque strip under the dock: the capsule is translucent, and
-              // list rows showing through it read as a rendering bug.
-              Container(
-                color: p.canvas,
-                padding: const EdgeInsets.only(top: S.xs),
-                child: FloatingNav(
-                  index: _tab,
-                  onSelect: _select,
-                  accent: _accent,
-                ),
-              ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

@@ -77,8 +77,85 @@ class Palette {
     onRoomMute: Color(0xFF9A9898),
   );
 
-  static Palette of(BuildContext context) =>
-      Theme.of(context).brightness == Brightness.dark ? inkNight : light;
+  /// A room lit by the record: the same rule the GPUI desktop uses. A bright
+  /// cover opens a bright room, a dark one stays night, and every surface is
+  /// translucent because there is a blurred cover behind it.
+  factory Palette.fromArt(Color accent) {
+    final hsl = HSLColor.fromColor(accent);
+    final h = hsl.hue;
+    final light = accent.computeLuminance() > 0.42;
+    Color a(double alpha, double sat, double lum) => HSLColor.fromAHSL(
+      alpha,
+      h,
+      sat.clamp(0.0, 1.0),
+      lum.clamp(0.0, 1.0),
+    ).toColor();
+    if (light) {
+      return Palette(
+        dark: false,
+        canvas: a(1.0, hsl.saturation * 0.16, 0.94),
+        ink: a(1, 0.22, 0.10),
+        inkDeep: const Color(0xFF0F0000),
+        body: a(1, 0.14, 0.22),
+        mute: a(1, 0.10, 0.38),
+        stone: a(1, 0.08, 0.46),
+        ash: a(1, 0.07, 0.56),
+        soft: a(0.55, 0.20, 1.0),
+        card: a(0.66, 0.30, 1.0),
+        hairline: a(0.16, 0.35, 0.10),
+        hairlineStrong: a(0.40, 0.20, 0.25),
+        room: a(0.92, 0.25, 0.12),
+        roomElevated: a(0.94, 0.20, 0.20),
+        onRoom: const Color(0xFFFDFCFC),
+        onRoomMute: a(1, 0.06, 0.70),
+      );
+    }
+    return Palette(
+      dark: true,
+      canvas: a(1.0, hsl.saturation * 0.18, 0.045),
+      ink: a(1, 0.03, 0.975),
+      inkDeep: const Color(0xFFFFFFFF),
+      body: a(1, 0.04, 0.86),
+      mute: a(1, 0.04, 0.68),
+      stone: a(1, 0.03, 0.58),
+      ash: a(1, 0.03, 0.50),
+      soft: a(0.30, 0.20, 1.0),
+      card: a(0.08, 0.22, 1.0),
+      hairline: a(0.11, 0.20, 1.0),
+      hairlineStrong: a(0.35, 0.10, 0.75),
+      room: a(0.86, 0.25, 0.03),
+      roomElevated: a(0.92, 0.20, 0.10),
+      onRoom: const Color(0xFFFDFCFC),
+      onRoomMute: a(1, 0.03, 0.62),
+    );
+  }
+
+  static Palette of(BuildContext context) {
+    final room = context.dependOnInheritedWidgetOfExactType<RoomScope>();
+    if (room != null) return room.palette;
+    return Theme.of(context).brightness == Brightness.dark ? inkNight : light;
+  }
+}
+
+/// The room the whole app is drawn in: the palette lifted from the current
+/// cover, and the cover itself so a backdrop can be painted behind everything.
+class RoomScope extends InheritedWidget {
+  const RoomScope({
+    super.key,
+    required this.palette,
+    required this.artUrl,
+    required super.child,
+  });
+
+  final Palette palette;
+  final String? artUrl;
+
+  static RoomScope? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<RoomScope>();
+
+  @override
+  bool updateShouldNotify(RoomScope old) =>
+      old.palette != palette || old.artUrl != artUrl;
 }
 
 abstract final class C {
@@ -125,21 +202,29 @@ abstract final class R {
 
 /// One monospace face carries every role. Weight is a variable axis, so it is
 /// expressed through [FontVariation] rather than a family per weight.
+/// Geist carries every role now, the same face the desktop draws with. The
+/// function keeps its old name so the twenty screens that call `mono()` do not
+/// need to care what the family is today.
 TextStyle mono(
   double size,
   double weight,
   Color color, {
-  double height = 1.55,
+  double height = 1.45,
   double? letterSpacing,
   TextDecoration? decoration,
 }) => TextStyle(
-  fontFamily: 'JetBrainsMono',
+  fontFamily: 'Geist',
   fontSize: size,
   height: height,
   letterSpacing: letterSpacing,
   color: color,
   decoration: decoration,
-  fontVariations: [FontVariation('wght', weight)],
+  fontWeight: switch (weight) {
+    >= 700 => FontWeight.w700,
+    >= 600 => FontWeight.w600,
+    >= 500 => FontWeight.w500,
+    _ => FontWeight.w400,
+  },
 );
 
 abstract final class T {
