@@ -94,6 +94,9 @@ pub struct Root {
     /// Set every frame from the real viewport: the hero shows a track list only
     /// when there is room for it, instead of squeezing the title.
     wide: bool,
+    /// The right column needs more room than the hero does; below this the
+    /// content is better off with the whole width.
+    panel: bool,
 }
 
 /// What a screen asks the shell to do. Screens get no `Context`, so they send
@@ -219,6 +222,7 @@ impl Root {
             vignette: None,
             glow: None,
             wide: true,
+            panel: true,
         };
         // Results arrive on the Search entity; the shell has to repaint when
         // they do, or the field shows a new query over an old answer.
@@ -2931,7 +2935,9 @@ impl Root {
 
 impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.wide = f32::from(window.viewport_size().width) >= 1180.0;
+        let width = f32::from(window.viewport_size().width);
+        self.wide = width >= 1180.0;
+        self.panel = width >= 1440.0;
         let p = self.palette;
         div()
             .size_full()
@@ -2991,7 +2997,7 @@ impl Render for Root {
                             .flex()
                             .child(self.sidebar(cx))
                             .child(self.content(cx))
-                            .when(self.wide, |el| el.child(self.now_panel())),
+                            .when(self.panel, |el| el.child(self.now_panel())),
                     )
                     .child(self.player_bar(cx))
                     .child(self.cast_sheet(cx))
