@@ -119,10 +119,51 @@ jobs:
           path: dist/bulba-music-arm64.apk
           if-no-files-found: error
 
+  desktop:
+    name: desktop · test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+      # GPUI is a GPU surface: Wayland/X11 headers, fontconfig, Vulkan, ALSA
+      # (rodio), and a C compiler for the vendored crates.
+      - name: linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwayland-dev wayland-protocols libxkbcommon-dev \
+            libxkbcommon-x11-dev libx11-dev libx11-xcb-dev libxcb1-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libfontconfig1-dev libfreetype-dev libvulkan-dev libasound2-dev \
+            pkg-config clang
+      - name: cargo test
+        working-directory: desktop
+        run: cargo test --bin bulba-desktop
+      - name: cargo build --release
+        working-directory: desktop
+        run: cargo build --release --bin bulba-desktop
+      - name: pack desktop
+        run: |
+          mkdir -p dist/bulba-music-desktop
+          cp desktop/target/release/bulba-desktop dist/bulba-music-desktop/bulba-music
+          cp -a desktop/assets dist/bulba-music-desktop/assets
+          tar czf dist/bulba-music-desktop-linux-x64.tar.gz -C dist bulba-music-desktop
+          rm -rf dist/bulba-music-desktop
+          ls -lh dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux-x64
+          path: dist/bulba-music-desktop-linux-x64.tar.gz
+          if-no-files-found: error
+
+
   release:
     name: release · ${{ github.ref_name }}
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [server, app]
+    needs: [server, app, desktop]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -138,6 +179,8 @@ jobs:
           mkdir -p out
           cp dist/linux-x64/bulba-music-linux-x64.tar.gz "out/bulba-music-${tag}-linux-x64.tar.gz"
           cp dist/android-arm64/bulba-music-arm64.apk "out/bulba-music-${tag}-arm64.apk"
+          cp dist/desktop-linux-x64/bulba-music-desktop-linux-x64.tar.gz \
+             "out/bulba-music-desktop-${tag}-linux-x64.tar.gz"
           cp dist/server-linux-x64/bulba-music-server "out/bulba-music-server-${tag}-linux-x64"
           ls -lh out
 
