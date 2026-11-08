@@ -89,6 +89,9 @@ pub struct Root {
     cast_open: bool,
     cast_note: String,
     modal: Option<Modal>,
+    /// Where the listener stopped, from any device.
+    cursor: Option<crate::api::Cursor>,
+    last_cursor_push: std::time::Instant,
     /// Set when the owner forces light or dark instead of letting the cover decide.
     force_lum: Option<f32>,
     /// Set every frame from the real viewport: the hero shows a track list only
@@ -217,6 +220,8 @@ impl Root {
             cast_open: false,
             cast_note: String::new(),
             modal: None,
+            cursor: None,
+            last_cursor_push: std::time::Instant::now(),
             force_lum,
             grain: None,
             vignette: None,
@@ -257,7 +262,7 @@ impl Root {
     fn load(&mut self, cx: &mut Context<Self>) {
         let api = self.api.clone();
         cx.spawn(async move |this, cx| {
-            let (albums, tracks, likes) = {
+            let (albums, tracks, likes, cursor) = {
                 let api = api.clone();
                 cx.background_executor()
                     .spawn(async move {
@@ -265,10 +270,12 @@ impl Root {
                             api.albums(),
                             api.tracks(),
                             api.like_ids().unwrap_or_default(),
+                            api.cursor().ok().flatten(),
                         )
                     })
                     .await
             };
+            this.update(cx, |this, _| this.cursor = cursor).ok();
             this.update(cx, |this, cx| {
                 match albums {
                     Ok(list) => this.albums = list,
@@ -421,6 +428,21 @@ impl Root {
                     if changed {
                         cx.notify();
                     }
+                    // Once every ten seconds is enough: the server keeps one row
+                    // per listener, and the phone is the one that reads it.
+                    if this.snap.playing
+                        && let Some(track) = this.snap.track.clone()
+                        && this.last_cursor_push.elapsed() > Duration::from_secs(10)
+                    {
+                        this.last_cursor_push = std::time::Instant::now();
+                        let api = this.api.clone();
+                        let position = this.snap.position.as_millis() as i64;
+                        cx.background_executor()
+                            .spawn(async move {
+                                let _ = api.put_cursor(track.id, position);
+                            })
+                            .detach();
+                    }
                     if let Some(track) = this.snap.track.clone() {
                         if this.room != Some(track.album_id) {
                             this.room = Some(track.album_id);
@@ -521,6 +543,41 @@ impl Root {
                     .child(bar("pulse-b", 880, 8.0))
                     .child(bar("pulse-c", 1040, 11.0))
             })
+    }
+
+    /// A cursor is only offered if it is new and the track still exists here.
+    fn resume_target(&self) -> Option<(i64, i64, String, i64)> {
+        let cursor = self.cursor.clone()?;
+        let track = cursor.track.clone()?;
+        let age = now_secs() - cursor.updated_at;
+        if cursor.updated_at <= 0 || !(0..7 * 24 * 3600).contains(&age) {
+            return None;
+        }
+        if !self.tracks.iter().any(|t| t.id == cursor.track_id) {
+            return None;
+        }
+        Some((
+            track.album_id,
+            cursor.track_id,
+            track.title,
+            cursor.position_ms,
+        ))
+    }
+
+    fn resume(&mut self, album_id: i64, track_id: i64, position_ms: i64, cx: &mut Context<Self>) {
+        let list = self.album_tracks(album_id);
+        let index = list.iter().position(|t| t.id == track_id).unwrap_or(0);
+        self.audio.play(list, index);
+        if position_ms > 1000 {
+            let audio = self.audio.clone();
+            cx.spawn(async move |_, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(700))
+                    .await;
+                audio.seek(Duration::from_millis(position_ms as u64));
+            })
+            .detach();
+        }
     }
 
     fn set_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
@@ -1879,6 +1936,44 @@ impl Root {
                 ),
         );
 
+        if self.snap.track.is_none()
+            && let Some((album_id, track_id, title, position_ms)) = self.resume_target()
+        {
+            column = column.child(
+                div()
+                    .id("resume")
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .h(px(38.))
+                    .px(px(14.))
+                    .rounded(px(999.))
+                    .bg(p.card)
+                    .border_1()
+                    .border_color(p.hairline)
+                    .hover(|el| el.bg(p.card_hover))
+                    .child(
+                        svg()
+                            .path(asset("play"))
+                            .size(px(12.))
+                            .text_color(p.accent),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(p.body)
+                            .child(format!(
+                                "продолжить «{}» · {}",
+                                title,
+                                fmt_duration(Duration::from_millis(position_ms as u64))
+                            )),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.resume(album_id, track_id, position_ms, cx);
+                    })),
+            );
+        }
+
         if let Some(id) = hero_album {
             column = column.child(self.hero(id, cx));
         }
@@ -3008,6 +3103,13 @@ impl Render for Root {
 
 fn asset(name: &str) -> SharedString {
     SharedString::from(format!("assets/icons/{name}.svg"))
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn fmt_duration(d: Duration) -> String {

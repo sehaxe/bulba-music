@@ -169,6 +169,20 @@ pub struct SearchResults {
     pub artists: Vec<ArtistSummary>,
 }
 
+/// Where this listener stopped on any device. The server keeps one row per user,
+/// so the phone and the desktop see the same point.
+#[derive(Clone, Debug, Deserialize, Default)]
+pub struct Cursor {
+    #[serde(default)]
+    pub track_id: i64,
+    #[serde(default)]
+    pub position_ms: i64,
+    #[serde(default)]
+    pub updated_at: i64,
+    #[serde(default)]
+    pub track: Option<Track>,
+}
+
 #[derive(Clone, Debug, Deserialize, Default)]
 pub struct Info {
     #[serde(default)]
@@ -302,6 +316,23 @@ impl Api {
 
     pub fn info(&self) -> Result<Info> {
         self.get("/api/info")
+    }
+
+    pub fn cursor(&self) -> Result<Option<Cursor>> {
+        let text = self.get_text("/api/playback")?;
+        let value: serde_json::Value = serde_json::from_str(&text)?;
+        if value.is_null() || value.get("track_id").is_none() {
+            return Ok(None);
+        }
+        Ok(serde_json::from_value(value).ok())
+    }
+
+    pub fn put_cursor(&self, track_id: i64, position_ms: i64) -> Result<()> {
+        let _: serde_json::Value = self.post(
+            "/api/playback",
+            &serde_json::json!({ "track_id": track_id, "position_ms": position_ms }),
+        )?;
+        Ok(())
     }
 
     pub fn stream_url(&self, id: i64) -> String {
