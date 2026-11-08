@@ -733,6 +733,8 @@ dependencies = [
  "mpris-server",
  "opus-pure",
  "rodio",
+ "rustls",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "smallvec",

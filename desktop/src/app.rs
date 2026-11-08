@@ -4,6 +4,7 @@ use std::cell::Cell;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::rc::Rc;
+use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
 use gpui::{
@@ -18,7 +19,11 @@ use crate::covers::Covers;
 use crate::fx;
 use crate::theme::{FONT, Palette};
 use crate::mpris::Mpris;
+use crate::cast;
+use crate::playlists::{self, Playlists};
+use crate::prefs::Prefs;
 use crate::search;
+use crate::settings::{self, Settings, Theme};
 use crate::wave::{self, Wave};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -31,13 +36,12 @@ pub enum Tab {
     Settings,
 }
 
-const TAB_ICONS: [(Tab, &str, &str); 6] = [
+const TAB_ICONS: [(Tab, &str, &str); 5] = [
     (Tab::Home, "home", "главная"),
     (Tab::Wave, "wave", "волна"),
     (Tab::Search, "search", "поиск"),
     (Tab::Library, "library", "библиотека"),
     (Tab::Liked, "heart", "любимое"),
-    (Tab::Settings, "settings", "настройки"),
 ];
 
 pub struct Root {
@@ -72,9 +76,57 @@ pub struct Root {
     grain: Option<Arc<gpui::RenderImage>>,
     vignette: Option<Arc<gpui::RenderImage>>,
     glow: Option<(i32, Arc<gpui::RenderImage>)>,
+    prefs: Prefs,
+    settings: Settings,
+    ui_tx: Sender<UiCmd>,
+    ui_rx: Receiver<UiCmd>,
+    playlists: Playlists,
+    /// Album ids per playlist, for the four-cover mosaic on each card.
+    pl_albums: std::collections::HashMap<i64, Vec<i64>>,
+    playlist: Option<(i64, String, Vec<Track>)>,
+    cast_devices: Vec<cast::Device>,
+    cast: Option<cast::Cast>,
+    cast_open: bool,
+    cast_note: String,
+    modal: Option<Modal>,
+    /// Set when the owner forces light or dark instead of letting the cover decide.
+    force_lum: Option<f32>,
     /// Set every frame from the real viewport: the hero shows a track list only
     /// when there is room for it, instead of squeezing the title.
     wide: bool,
+}
+
+/// What a screen asks the shell to do. Screens get no `Context`, so they send
+/// a message; the ticker applies it on the UI thread where `cx` exists.
+#[derive(Debug)]
+enum UiCmd {
+    Server(String),
+    Quality(String),
+    Crossfade(f64),
+    ReplayGain(bool),
+    Theme(Theme),
+    OpenPlaylist(i64),
+    NewPlaylist,
+    RenamePlaylist(i64),
+    DeletePlaylist(i64),
+    RemoveFromPlaylist(i64, i64),
+    ReloadPlaylists,
+    CastOpen,
+    CastPick(usize),
+    CloseCast,
+}
+
+#[derive(Clone, Debug)]
+struct Modal {
+    kind: ModalKind,
+    text: String,
+}
+
+#[derive(Clone, Debug)]
+enum ModalKind {
+    NewPlaylist,
+    Rename(i64),
+    Server,
 }
 
 impl Root {
@@ -82,6 +134,28 @@ impl Root {
         let audio = Audio::start(api.clone());
         let nav = std::sync::mpsc::channel();
         let search = cx.new(|cx| search::Search::new(cx));
+        let prefs = Prefs::load();
+        let mut settings = Settings::new(if prefs.server.is_empty() {
+            api.base.clone()
+        } else {
+            prefs.server.clone()
+        });
+        settings.quality = prefs.quality.clone();
+        settings.crossfade = prefs.crossfade;
+        settings.replay_gain = prefs.replay_gain;
+        settings.theme = match prefs.theme.as_str() {
+            "light" => Theme::Light,
+            "dark" => Theme::Dark,
+            _ => Theme::Auto,
+        };
+        audio.set_crossfade(settings.crossfade as f32);
+        audio.set_replay_gain(settings.replay_gain);
+        let force_lum = match settings.theme {
+            Theme::Light => Some(0.62),
+            Theme::Dark => Some(0.2),
+            Theme::Auto => None,
+        };
+        let ui = std::sync::mpsc::channel();
         // Media keys and the desktop's own player widget. Failure is quiet: a
         // session without a bus still plays music.
         let mpris = {
@@ -128,6 +202,19 @@ impl Root {
             nav_rx: nav.1,
             search,
             mpris,
+            prefs,
+            settings,
+            ui_tx: ui.0,
+            ui_rx: ui.1,
+            playlists: Playlists::new(),
+            pl_albums: Default::default(),
+            playlist: None,
+            cast_devices: Vec::new(),
+            cast: None,
+            cast_open: false,
+            cast_note: String::new(),
+            modal: None,
+            force_lum,
             grain: None,
             vignette: None,
             glow: None,
@@ -195,6 +282,17 @@ impl Root {
                         .max_by_key(|a| a.plays)
                         .map(|a| a.id)
                 });
+                if let Ok(id) = std::env::var("BULBA_PLAYLIST")
+                    && let Ok(id) = id.parse::<i64>()
+                {
+                    this.open_playlist(id, cx);
+                }
+                if std::env::var("BULBA_MODAL").ok().as_deref() == Some("new") {
+                    this.modal = Some(Modal {
+                        kind: ModalKind::NewPlaylist,
+                        text: "ночь".into(),
+                    });
+                }
                 if let Some(id) = this.boot_album {
                     this.room = Some(id);
                     this.ensure_art(id, cx);
@@ -229,6 +327,7 @@ impl Root {
                     }
                 }
                 cx.notify();
+                this.reload_playlists(cx);
                 this.load_art(cx);
             })
             .ok();
@@ -290,6 +389,7 @@ impl Root {
                 let alive = this.update(cx, |this, cx| {
                     this.frame += 1;
                     this.drain_nav(cx);
+                    this.drain_ui(cx);
                     let snap = this.audio.snapshot();
                     let track_changed =
                         snap.track.as_ref().map(|t| t.id) != this.snap.track.as_ref().map(|t| t.id);
@@ -372,7 +472,8 @@ impl Root {
             return;
         }
         if let Some(art) = self.covers.get(album_id) {
-            self.palette = Palette::from_art(art.hue, art.sat, art.lum);
+            let lum = self.force_lum.unwrap_or(art.lum);
+            self.palette = Palette::from_art(art.hue, art.sat, lum);
             let hue = art.hue.round() as i32;
             self.glow = Some((hue, fx::glow(512, art.hue, art.sat.max(0.35), 0.55)));
         }
@@ -386,6 +487,36 @@ impl Root {
             .as_ref()
             .filter(|(h, _)| *h == hue)
             .map(|(_, image)| image.clone())
+    }
+
+    /// Three bars that breathe while something plays. Drawn, like every icon
+    /// here: no assets, no gif, just three animated rectangles.
+    fn pulse(&self) -> impl IntoElement {
+        let p = self.palette;
+        let bar = |id: &'static str, ms: u64, hi: f32| {
+            div()
+                .w(px(2.5))
+                .rounded(px(999.))
+                .bg(p.accent)
+                .with_animation(
+                    id,
+                    Animation::new(Duration::from_millis(ms)).repeat(),
+                    move |el, t| {
+                        let h = 3.0 + (t * std::f32::consts::TAU).sin().abs() * hi;
+                        el.h(px(h))
+                    },
+                )
+        };
+        div()
+            .h(px(14.))
+            .flex()
+            .items_end()
+            .gap(px(2.5))
+            .when(self.snap.playing, |el| {
+                el.child(bar("pulse-a", 620, 10.0))
+                    .child(bar("pulse-b", 880, 8.0))
+                    .child(bar("pulse-c", 1040, 11.0))
+            })
     }
 
     fn set_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
@@ -453,6 +584,238 @@ impl Root {
         .detach();
     }
 
+    /// Applies one message from a screen. Everything that needs `cx` lives here.
+    fn drain_ui(&mut self, cx: &mut Context<Self>) {
+        let mut dirty = false;
+        while let Ok(cmd) = self.ui_rx.try_recv() {
+            dirty = true;
+            match cmd {
+                UiCmd::Quality(q) => {
+                    self.settings.quality = q;
+                    let api = self.api.clone();
+                    let settings = self.settings.clone();
+                    cx.background_executor()
+                        .spawn(async move {
+                            let _ = settings.save_quality(&api);
+                        })
+                        .detach();
+                    self.save_prefs();
+                }
+                UiCmd::Server(v) => {
+                    self.settings.server = v.clone();
+                    self.api.base = v.clone();
+                    self.prefs.server = v;
+                    self.save_prefs();
+                    self.load(cx);
+                }
+                UiCmd::Crossfade(secs) => {
+                    self.settings.crossfade = secs;
+                    self.audio.set_crossfade(secs as f32);
+                    self.save_prefs();
+                }
+                UiCmd::ReplayGain(on) => {
+                    self.settings.replay_gain = on;
+                    self.audio.set_replay_gain(on);
+                    self.save_prefs();
+                }
+                UiCmd::Theme(theme) => {
+                    self.settings.theme = theme.clone();
+                    self.force_lum = match theme {
+                        Theme::Light => Some(0.62),
+                        Theme::Dark => Some(0.2),
+                        Theme::Auto => None,
+                    };
+                    self.save_prefs();
+                    if let Some(id) = self.room {
+                        self.refit_room(id);
+                    }
+                }
+                UiCmd::OpenPlaylist(id) => self.open_playlist(id, cx),
+                UiCmd::NewPlaylist => {
+                    self.modal = Some(Modal {
+                        kind: ModalKind::NewPlaylist,
+                        text: String::new(),
+                    });
+                }
+                UiCmd::RenamePlaylist(id) => {
+                    let text = self
+                        .playlist
+                        .as_ref()
+                        .filter(|(pid, _, _)| *pid == id)
+                        .map(|(_, name, _)| name.clone())
+                        .unwrap_or_default();
+                    self.modal = Some(Modal {
+                        kind: ModalKind::Rename(id),
+                        text,
+                    });
+                }
+                UiCmd::DeletePlaylist(id) => {
+                    let api = self.api.clone();
+                    self.playlist = None;
+                    self.playlists.items.retain(|p| p.id != id);
+                    cx.background_executor()
+                        .spawn(async move {
+                            let _ = playlists::Playlists::remove(&api, id);
+                        })
+                        .detach();
+                }
+                UiCmd::RemoveFromPlaylist(playlist, track) => {
+                    let api = self.api.clone();
+                    if let Some((_, _, tracks)) = self.playlist.as_mut() {
+                        tracks.retain(|t| t.id != track);
+                    }
+                    cx.background_executor()
+                        .spawn(async move {
+                            let _ = playlists::Playlists::remove_track(&api, playlist, track);
+                        })
+                        .detach();
+                }
+                UiCmd::ReloadPlaylists => self.reload_playlists(cx),
+                UiCmd::CastOpen => {
+                    self.cast_open = true;
+                    self.cast_note = "ищу устройства…".into();
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        let found = cast::discover(std::time::Duration::from_secs(2));
+                        let _ = tx.send(found);
+                    });
+                    cx.spawn(async move |this, cx| {
+                        let found = cx
+                            .background_executor()
+                            .spawn(async move {
+                                rx.recv_timeout(std::time::Duration::from_secs(4))
+                                    .unwrap_or_default()
+                            })
+                            .await;
+                        let _ = this.update(cx, |this, cx| {
+                            this.cast_devices = found;
+                            this.cast_note = if this.cast_devices.is_empty() {
+                                "ничего не нашлось".into()
+                            } else {
+                                format!("{} устройств", this.cast_devices.len())
+                            };
+                            cx.notify();
+                        });
+                    })
+                    .detach();
+                }
+                UiCmd::CastPick(index) => {
+                    let Some(device) = self.cast_devices.get(index).cloned() else {
+                        continue;
+                    };
+                    let track = self.snap.track.clone();
+                    let url = track.as_ref().map(|t| self.api.stream_url(t.id));
+                    self.cast_note = format!("подключаюсь к {}", device.name);
+                    let mut handle = cast::Cast::new();
+                    let port = self.api.base.clone();
+                    let _ = port;
+                    match handle.connect(&device) {
+                        Ok(()) => {
+                            if let (Some(track), Some(url)) = (track, url) {
+                                let _ = handle.load(&track, &url, 0.0, true);
+                                self.cast_note = format!("играет на {}", device.name);
+                            }
+                            self.cast = Some(handle);
+                        }
+                        Err(e) => self.cast_note = format!("не вышло: {e}"),
+                    }
+                }
+                UiCmd::CloseCast => self.cast_open = false,
+            }
+        }
+        if dirty {
+            cx.notify();
+        }
+    }
+
+    fn save_prefs(&mut self) {
+        self.prefs.quality = self.settings.quality.clone();
+        self.prefs.crossfade = self.settings.crossfade;
+        self.prefs.replay_gain = self.settings.replay_gain;
+        self.prefs.theme = self.settings.theme.tag().to_string();
+        self.prefs.save();
+    }
+
+    fn reload_playlists(&mut self, cx: &mut Context<Self>) {
+        let api = self.api.clone();
+        cx.spawn(async move |this, cx| {
+            let lists = cx
+                .background_executor()
+                .spawn(async move { Playlists::load(&api) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if let Ok(lists) = lists {
+                    this.playlists = lists;
+                    this.load_playlist_art(cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Four album ids per playlist, so a card is a mosaic of what is inside it
+    /// rather than a grey rectangle.
+    fn load_playlist_art(&mut self, cx: &mut Context<Self>) {
+        let api = self.api.clone();
+        let ids: Vec<i64> = self.playlists.items.iter().map(|p| p.id).collect();
+        if ids.is_empty() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let found = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut out: std::collections::HashMap<i64, Vec<i64>> = Default::default();
+                    for id in ids {
+                        if let Ok(tracks) = playlists::Playlists::tracks(&api, id) {
+                            let mut albums: Vec<i64> =
+                                tracks.iter().map(|t| t.album_id).collect();
+                            albums.dedup();
+                            albums.truncate(4);
+                            out.insert(id, albums);
+                        }
+                    }
+                    out
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.pl_albums = found;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn open_playlist(&mut self, id: i64, cx: &mut Context<Self>) {
+        let api = self.api.clone();
+        let name = self
+            .playlists
+            .items
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.name.clone())
+            .unwrap_or_default();
+        cx.spawn(async move |this, cx| {
+            let tracks = cx
+                .background_executor()
+                .spawn(async move { playlists::Playlists::tracks(&api, id) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match tracks {
+                    Ok(tracks) => {
+                        this.playlist = Some((id, name, tracks));
+                        this.tab = Tab::Library;
+                        this.album = None;
+                    }
+                    Err(e) => this.error = Some(format!("плейлист: {e}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn drain_nav(&mut self, cx: &mut Context<Self>) {
         let mut opened = false;
         while let Ok(id) = self.nav_rx.try_recv() {
@@ -492,6 +855,309 @@ impl Root {
             .track_focus(&focus)
             .on_click(move |_, window, _| window.focus(&focus_click))
             .child(search::render(&search, p, on_play, on_open))
+    }
+
+    fn settings_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = self.palette;
+        let tx = self.ui_tx.clone();
+        let send = |cmd: UiCmd| {
+            let _ = tx.send(cmd);
+        };
+        let (t1, t2, t3, t4, t5) = (
+            self.ui_tx.clone(),
+            self.ui_tx.clone(),
+            self.ui_tx.clone(),
+            self.ui_tx.clone(),
+            self.ui_tx.clone(),
+        );
+        let handlers = settings::Handlers {
+            on_server: Rc::new(move |v| {
+                let _ = t1.send(UiCmd::Server(v));
+            }),
+            on_edit_server: Rc::new(move || {
+                let _ = t2.send(UiCmd::Server(String::new()));
+            }),
+            on_quality: Rc::new(move |q| {
+                let _ = t3.send(UiCmd::Quality(q));
+            }),
+            on_crossfade: Rc::new(move |s| {
+                let _ = t4.send(UiCmd::Crossfade(s));
+            }),
+            on_replay_gain: Rc::new(move |on| {
+                let _ = t5.send(UiCmd::ReplayGain(on));
+            }),
+            on_theme: Rc::new({
+                let tx = self.ui_tx.clone();
+                move |t| {
+                    let _ = tx.send(UiCmd::Theme(t));
+                }
+            }),
+        };
+        let _ = send;
+        div()
+            .pt(px(10.))
+            .child(settings::render(&self.settings, p, &handlers))
+    }
+
+    fn modal_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = self.palette;
+        let Some(modal) = self.modal.clone() else {
+            return div().into_any_element();
+        };
+        let title = match modal.kind {
+            ModalKind::NewPlaylist => "новый плейлист",
+            ModalKind::Rename(_) => "переименовать",
+            ModalKind::Server => "адрес сервера",
+        };
+        let hint = match modal.kind {
+            ModalKind::NewPlaylist => "имя плейлиста",
+            ModalKind::Rename(_) => "новое имя",
+            ModalKind::Server => "http://хост:порт",
+        };
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(gpui::hsla(0.0, 0.0, 0.0, 0.45))
+            .child(
+                div()
+                    .id("modal")
+                    .w(px(420.))
+                    .rounded(px(18.))
+                    .bg(p.bar)
+                    .border_1()
+                    .border_color(p.hairline)
+                    .shadow(vec![BoxShadow {
+                        color: p.shadow,
+                        offset: point(px(0.), px(24.)),
+                        blur_radius: px(60.),
+                        spread_radius: px(-12.),
+                    }])
+                    .p(px(22.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.))
+                    .child(
+                        div()
+                            .text_size(px(10.5))
+                            .text_color(p.ash)
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .h(px(46.))
+                            .w_full()
+                            .px(px(14.))
+                            .flex()
+                            .items_center()
+                            .rounded(px(12.))
+                            .bg(p.card)
+                            .border_1()
+                            .border_color(p.hairline)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_size(px(15.))
+                                    .text_color(if modal.text.is_empty() { p.ash } else { p.ink })
+                                    .child(if modal.text.is_empty() {
+                                        hint.to_string()
+                                    } else {
+                                        modal.text.clone()
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .w(px(1.5))
+                                    .h(px(18.))
+                                    .bg(p.accent)
+                                    .with_animation(
+                                        "caret",
+                                        Animation::new(Duration::from_millis(900))
+                                            .repeat()
+                                            .with_easing(ease_in_out),
+                                        |el, t| el.opacity(if t < 0.5 { 1.0 } else { 0.0 }),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .text_color(p.ash)
+                                    .child("enter — сохранить · esc — отмена"),
+                            )
+                            .child(
+                                div()
+                                    .id("modal-ok")
+                                    .h(px(30.))
+                                    .px(px(16.))
+                                    .rounded(px(999.))
+                                    .bg(p.ink)
+                                    .flex()
+                                    .items_center()
+                                    .hover(|el| el.opacity(0.88))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .text_color(p.canvas)
+                                            .child("готово"),
+                                    )
+                                    .on_click(cx.listener(|this, _, _, cx| this.submit_modal(cx))),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn submit_modal(&mut self, cx: &mut Context<Self>) {
+        let Some(modal) = self.modal.take() else {
+            return;
+        };
+        let text = modal.text.trim().to_string();
+        match modal.kind {
+            ModalKind::NewPlaylist => {
+                if text.is_empty() {
+                    return;
+                }
+                let api = self.api.clone();
+                cx.spawn(async move |this, cx| {
+                    let created = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let id = Playlists::create(&api, &text)?;
+                            let lists = Playlists::load(&api)?;
+                            anyhow::Ok((id, lists))
+                        })
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        match created {
+                            Ok((id, lists)) => {
+                                this.playlists = lists;
+                                this.open_playlist(id, cx);
+                            }
+                            Err(e) => this.error = Some(format!("плейлист: {e}")),
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
+            }
+            ModalKind::Rename(id) => {
+                if text.is_empty() {
+                    return;
+                }
+                let api = self.api.clone();
+                if let Some((_, name, _)) = self.playlist.as_mut() {
+                    *name = text.clone();
+                }
+                cx.spawn(async move |this, cx| {
+                    let api2 = api.clone();
+                    let _ = cx
+                        .background_executor()
+                        .spawn(async move { Playlists::rename(&api2, id, &text) })
+                        .await;
+                    let lists = cx
+                        .background_executor()
+                        .spawn(async move { Playlists::load(&api) })
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        if let Ok(lists) = lists {
+                            this.playlists = lists;
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
+            }
+            ModalKind::Server => {
+                if !text.is_empty() {
+                    let _ = self.ui_tx.send(UiCmd::Server(
+                        text.trim_end_matches('/').to_string(),
+                    ));
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn cast_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = self.palette;
+        let active = self.cast.is_some();
+        div()
+            .id("cast")
+            .size(px(32.))
+            .rounded(px(9.))
+            .hover(|el| el.bg(p.card_hover))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                svg()
+                    .path(asset("cast"))
+                    .size(px(17.))
+                    .text_color(if active { p.accent } else { p.mute }),
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                let _ = this.ui_tx.send(UiCmd::CastOpen);
+                cx.notify();
+            }))
+    }
+
+    fn cast_sheet(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = self.palette;
+        if !self.cast_open {
+            return div().into_any_element();
+        }
+        let tx = self.ui_tx.clone();
+        let pick = move |i: usize| {
+            let _ = tx.send(UiCmd::CastPick(i));
+        };
+        let close = self.ui_tx.clone();
+        div()
+            .absolute()
+            .right(px(24.))
+            .bottom(px(112.))
+            .rounded(px(16.))
+            .bg(p.bar)
+            .border_1()
+            .border_color(p.hairline)
+            .shadow(vec![BoxShadow {
+                color: p.shadow,
+                offset: point(px(0.), px(18.)),
+                blur_radius: px(50.),
+                spread_radius: px(-12.),
+            }])
+            .child(cast::render_sheet(p, &self.cast_devices, &self.cast_note, pick))
+            .child(
+                div()
+                    .id("cast-close")
+                    .absolute()
+                    .right(px(8.))
+                    .top(px(8.))
+                    .size(px(18.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(999.))
+                    .hover(|el| el.bg(p.card_hover))
+                    .child(
+                        svg()
+                            .path(asset("close"))
+                            .size(px(10.))
+                            .text_color(p.ash),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let _ = close.send(UiCmd::CloseCast);
+                        cx.notify();
+                    })),
+            )
+            .into_any_element()
     }
 
     fn wave_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -649,6 +1315,46 @@ impl Root {
                 None => div().into_any_element(),
             })
             .child(div().absolute().inset_0().bg(p.scrim()))
+            // Two slow lights in the cover's own colour. GPUI has no shaders, so
+            // the light is a baked radial texture whose position, size and
+            // opacity are animated — one animated gradient per frame is cheaper
+            // than it sounds and it is what makes the window feel alive.
+            .child(match &self.glow {
+                Some(g) => div()
+                    .absolute()
+                    .child(img(g.1.clone()).size_full().object_fit(ObjectFit::Contain))
+                    .with_animation(
+                        "aurora-a",
+                        Animation::new(Duration::from_millis(26_000)).repeat(),
+                        |el, t| {
+                            let a = (t * std::f32::consts::TAU).sin() * 0.5 + 0.5;
+                            el.left(px(-260. + a * 320.))
+                                .top(px(-340. + a * 140.))
+                                .size(px(760. + a * 180.))
+                                .opacity(0.30 + a * 0.22)
+                        },
+                    )
+                    .into_any_element(),
+                None => div().into_any_element(),
+            })
+            .child(match &self.glow {
+                Some(g) => div()
+                    .absolute()
+                    .child(img(g.1.clone()).size_full().object_fit(ObjectFit::Contain))
+                    .with_animation(
+                        "aurora-b",
+                        Animation::new(Duration::from_millis(41_000)).repeat(),
+                        |el, t| {
+                            let a = (t * std::f32::consts::TAU + 2.1).sin() * 0.5 + 0.5;
+                            el.right(px(-320. + a * 260.))
+                                .bottom(px(-380. + a * 120.))
+                                .size(px(820. + a * 220.))
+                                .opacity(0.18 + a * 0.18)
+                        },
+                    )
+                    .into_any_element(),
+                None => div().into_any_element(),
+            })
             .child(match &self.vignette {
                 Some(v) => img(v.clone())
                     .absolute()
@@ -670,62 +1376,337 @@ impl Root {
             })
     }
 
-    fn rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The left panel does the work Spotify's does: it is the library, not a
+    /// row of icons. Playlists live here, always one click away, because that
+    /// is what a person actually opens the app to reach.
+    fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.palette;
-        let mut items = Vec::new();
-        for (tab, icon_name, _label) in TAB_ICONS {
+        let mut nav = Vec::new();
+        for (tab, icon_name, label) in TAB_ICONS {
             let active = self.tab == tab;
-            items.push(
+            nav.push(
                 div()
-                    .id(SharedString::from(format!("nav-{}", icon_name)))
+                    .id(SharedString::from(format!("nav-{icon_name}")))
+                    .h(px(38.))
                     .w_full()
-                    .h(px(46.))
+                    .px(px(10.))
+                    .rounded(px(9.))
                     .flex()
                     .items_center()
-                    .justify_center()
-                    .rounded(px(14.))
-                    .when(active, |el| {
-                        el.bg(p.card).border_1().border_color(p.hairline)
-                    })
+                    .gap(px(11.))
+                    .when(active, |el| el.bg(p.card))
                     .hover(|el| el.bg(p.card_hover))
                     .child(
                         svg()
                             .path(asset(icon_name))
-                            .size(px(19.))
+                            .size(px(16.))
                             .text_color(if active { p.accent } else { p.icon }),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(13.5))
+                            .font_weight(if active {
+                                FontWeight::MEDIUM
+                            } else {
+                                FontWeight::NORMAL
+                            })
+                            .text_color(if active { p.ink } else { p.body })
+                            .child(label),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| this.set_tab(tab, cx))),
             );
         }
 
-        div()
-            .w(px(70.))
-            .h_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .pt(px(16.))
-            .pb(px(14.))
-            .gap(px(6.))
-            .child(
+        let tx_open = self.ui_tx.clone();
+        let mut lists = div().flex().flex_col().gap(px(1.));
+        for item in self.playlists.items.iter() {
+            let id = item.id;
+            let tx = tx_open.clone();
+            lists = lists.child(
                 div()
-                    .size(px(28.))
-                    .mb(px(10.))
-                    .rounded(px(9.))
-                    .bg(p.accent)
+                    .id(SharedString::from(format!("side-pl-{id}")))
+                    .h(px(30.))
+                    .px(px(10.))
+                    .rounded(px(7.))
                     .flex()
                     .items_center()
-                    .justify_center()
+                    .gap(px(8.))
+                    .hover(|el| el.bg(p.card_hover))
+                    .child(
+                        svg()
+                            .path(asset("queue"))
+                            .size(px(12.))
+                            .text_color(p.ash),
+                    )
                     .child(
                         div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(p.canvas)
-                            .child("b"),
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(12.))
+                            .text_color(p.body)
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(item.name.clone()),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.open_playlist(id, cx);
+                    })),
+            );
+        }
+
+        div()
+            .w(px(268.))
+            .h_full()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .px(px(12.))
+            .pt(px(14.))
+            .pb(px(10.))
+            .gap(px(2.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .px(px(8.))
+                    .mb(px(14.))
+                    .child(
+                        svg()
+                            .path(asset("logo"))
+                            .size(px(24.))
+                            .text_color(p.accent),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(14.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(p.ink)
+                            .child("bulba music"),
                     ),
             )
-            .children(items)
-            .child(div().flex_1())
+            .children(nav)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px(px(10.))
+                    .pt(px(18.))
+                    .pb(px(6.))
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(p.ash)
+                            .child("плейлисты"),
+                    )
+                    .child(
+                        div()
+                            .id("side-new")
+                            .size(px(18.))
+                            .rounded(px(5.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .hover(|el| el.bg(p.card_hover))
+                            .child(svg().path(asset("plus")).size(px(11.)).text_color(p.ash))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.modal = Some(Modal {
+                                    kind: ModalKind::NewPlaylist,
+                                    text: String::new(),
+                                });
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .id("side-lists")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(lists),
+            )
+            .child(
+                div()
+                    .id("side-settings")
+                    .h(px(34.))
+                    .px(px(10.))
+                    .rounded(px(9.))
+                    .flex()
+                    .items_center()
+                    .gap(px(11.))
+                    .hover(|el| el.bg(p.card_hover))
+                    .child(
+                        svg()
+                            .path(asset("settings"))
+                            .size(px(15.))
+                            .text_color(if self.tab == Tab::Settings {
+                                p.accent
+                            } else {
+                                p.icon
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .text_color(p.body)
+                            .child("настройки"),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.set_tab(Tab::Settings, cx))),
+            )
+    }
+
+    /// The right panel: what is playing, and what comes next. On Spotify this is
+    /// the column that removes the need to open a queue sheet at all.
+    fn now_panel(&self) -> impl IntoElement {
+        let p = self.palette;
+        let track = self.snap.track.clone();
+        let art = track
+            .as_ref()
+            .and_then(|t| self.covers.get(t.album_id))
+            .map(|a| a.cover.clone());
+        let mut queue = div().flex().flex_col().gap(px(1.));
+        for (i, t) in self.snap.upcoming.iter().take(9).enumerate() {
+            queue = queue.child(
+                div()
+                    .h(px(38.))
+                    .px(px(6.))
+                    .rounded(px(7.))
+                    .flex()
+                    .items_center()
+                    .gap(px(9.))
+                    .hover(|el| el.bg(p.card_hover))
+                    .child(
+                        div()
+                            .w(px(14.))
+                            .text_size(px(10.))
+                            .text_color(p.ash)
+                            .child(format!("{}", i + 1)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .text_color(p.body)
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(t.title.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(p.ash)
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(t.artist.clone()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(p.ash)
+                            .child(fmt_duration(t.duration())),
+                    ),
+            );
+        }
+
+        div()
+            .w(px(340.))
+            .h_full()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .px(px(20.))
+            .pt(px(56.))
+            .pb(px(10.))
+            .border_l_1()
+            .border_color(p.hairline_soft)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(p.ash)
+                            .child("сейчас играет"),
+                    )
+                    .child(self.pulse()),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .h(px(300.))
+                    .rounded(px(14.))
+                    .overflow_hidden()
+                    .bg(p.card)
+                    .shadow(vec![BoxShadow {
+                        color: p.shadow.opacity(0.55),
+                        offset: point(px(0.), px(20.)),
+                        blur_radius: px(50.),
+                        spread_radius: px(-12.),
+                    }])
+                    .child(match art {
+                        Some(a) => img(a)
+                            .size_full()
+                            .object_fit(ObjectFit::Cover)
+                            .into_any_element(),
+                        None => div().size_full().into_any_element(),
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .text_size(px(19.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(if track.is_some() { p.ink } else { p.ash })
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(
+                                track
+                                    .as_ref()
+                                    .map(|t| t.title.clone())
+                                    .unwrap_or_else(|| "тишина".into()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .text_color(p.ash)
+                            .child(track.as_ref().map(|t| t.artist.clone()).unwrap_or_default()),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(p.ash)
+                    .pt(px(4.))
+                    .child(if self.snap.upcoming.is_empty() {
+                        "очередь пуста"
+                    } else {
+                        "дальше"
+                    }),
+            )
+            .child(
+                div()
+                    .id("now-queue")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(queue),
+            )
     }
 
     fn titlebar(&self) -> impl IntoElement {
@@ -744,13 +1725,7 @@ impl Root {
                     .gap(px(10.))
                     .child(
                         div()
-                            .text_size(px(11.))
-                            .text_color(p.mute)
-                            .child("bulba music"),
-                    )
-                    .child(
-                        div()
-                            .size(px(3.))
+                            .size(px(4.))
                             .rounded(px(999.))
                             .bg(if self.error.is_some() { gpui::red() } else { p.accent }),
                     )
@@ -780,7 +1755,9 @@ impl Root {
 
     fn content(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = self.palette;
-        let body = if let Some(id) = self.album {
+        let body = if let Some((id, name, tracks)) = self.playlist.clone() {
+            self.playlist_view(id, &name, &tracks, cx).into_any_element()
+        } else if let Some(id) = self.album {
             self.album_view(id, cx).into_any_element()
         } else {
             match self.tab {
@@ -789,9 +1766,7 @@ impl Root {
                 Tab::Liked => self.liked_view(cx).into_any_element(),
                 Tab::Search => self.search_view(cx).into_any_element(),
                 Tab::Wave => self.wave_view(cx).into_any_element(),
-                Tab::Settings => self
-                    .placeholder("настройки", "сервер, качество, звук")
-                    .into_any_element(),
+                Tab::Settings => self.settings_view(cx).into_any_element(),
             }
         };
         div()
@@ -807,15 +1782,7 @@ impl Root {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .child(
-                        div()
-                            .w_full()
-                            .max_w(px(1240.))
-                            .mx_auto()
-                            .px(px(36.))
-                            .pb(px(40.))
-                            .child(body),
-                    ),
+                    .child(div().w_full().px(px(30.)).pb(px(36.)).child(body)),
             )
             .text_color(p.ink)
     }
@@ -1259,12 +2226,65 @@ impl Root {
         for album in self.albums.iter() {
             grid = grid.child(self.album_tile(album.id, &album.title, &album.artist, cx));
         }
+        let tx_open = self.ui_tx.clone();
+        let tx_new = self.ui_tx.clone();
+        let open = move |id: i64| {
+            let _ = tx_open.send(UiCmd::OpenPlaylist(id));
+        };
+        let create = move || {
+            let _ = tx_new.send(UiCmd::NewPlaylist);
+        };
         div()
             .flex()
             .flex_col()
             .gap(px(22.))
             .pt(px(10.))
             .child(self.heading("библиотека", Some(format!("{} альбомов", self.albums.len()))))
+            .child(
+                div()
+                    .flex()
+                    .items_end()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(17.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(p.ink)
+                            .child("плейлисты"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(p.ash)
+                            .child(format!("{}", self.playlists.items.len())),
+                    ),
+            )
+            .child(playlists::render_list(
+                p,
+                &self.playlists.items,
+                {
+                    let albums = self.pl_albums.clone();
+                    let art: std::collections::HashMap<i64, Arc<gpui::RenderImage>> = self
+                        .covers
+                        .cache
+                        .iter()
+                        .map(|(id, a)| (*id, a.cover.clone()))
+                        .collect();
+                    move |id: i64| {
+                        albums
+                            .get(&id)
+                            .map(|ids| {
+                                ids.iter()
+                                    .filter_map(|a| art.get(a).cloned())
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default()
+                    }
+                },
+                open,
+                create,
+            ))
+            .child(self.section_title("альбомы", None))
             .child(grid)
             .when(self.albums.is_empty(), |el| {
                 el.child(
@@ -1309,6 +2329,66 @@ impl Root {
                         .child("здесь пока пусто"),
                 )
             })
+    }
+
+    fn playlist_view(
+        &self,
+        id: i64,
+        name: &str,
+        tracks: &[Track],
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let p = self.palette;
+        let audio = self.audio.clone();
+        let queue = tracks.to_vec();
+        let playing = self.snap.track.as_ref().map(|t| t.id);
+        let on_play = move |i: usize| {
+            audio.play(queue.clone(), i);
+        };
+        let tx = self.ui_tx.clone();
+        let remove = move |track: i64| {
+            let _ = tx.send(UiCmd::RemoveFromPlaylist(id, track));
+        };
+        let rename = {
+            let tx = self.ui_tx.clone();
+            move || {
+                let _ = tx.send(UiCmd::RenamePlaylist(id));
+            }
+        };
+        let delete = {
+            let tx = self.ui_tx.clone();
+            move || {
+                let _ = tx.send(UiCmd::DeletePlaylist(id));
+            }
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .pt(px(10.))
+            .child(
+                div()
+                    .id("pl-back")
+                    .flex()
+                    .w(px(96.))
+                    .items_center()
+                    .gap(px(6.))
+                    .px(px(10.))
+                    .py(px(6.))
+                    .rounded(px(999.))
+                    .hover(|el| el.bg(p.card))
+                    .child(
+                        svg()
+                            .path(asset("chevron"))
+                            .size(px(13.))
+                            .text_color(p.mute)
+                            .with_transformation(Transformation::rotate(gpui::percentage(0.75))),
+                    )
+                    .child(div().text_size(px(12.)).text_color(p.mute).child("назад")),
+            )
+            .child(playlists::render_one(
+                p, name, tracks, playing, on_play, remove, rename, delete,
+            ))
     }
 
     fn album_view(&self, id: i64, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1546,9 +2626,9 @@ impl Root {
             })
             .unwrap_or_default();
 
-        div().px(px(16.)).pb(px(16.)).child(
+        div().px(px(14.)).pb(px(14.)).child(
             div()
-                .h(px(84.))
+                .h(px(96.))
                 .w_full()
                 .rounded(px(20.))
                 .bg(p.bar)
@@ -1562,21 +2642,22 @@ impl Root {
                 }])
                 .flex()
                 .items_center()
-                .px(px(16.))
-                .gap(px(18.))
-                // left: what is playing
+                .gap(px(24.))
+                .px(px(20.))
+                // left: what is playing, at a size you can read across the desk
                 .child(
                     div()
                         .w(px(300.))
+                        .flex_shrink_0()
                         .flex()
                         .items_center()
-                        .gap(px(12.))
+                        .gap(px(14.))
                         .child(
                             div()
                                 .id("bar-cover")
-                                .w(px(50.))
-                                .h(px(50.))
-                                .rounded(px(11.))
+                                .w(px(58.))
+                                .h(px(58.))
+                                .rounded(px(12.))
                                 .overflow_hidden()
                                 .flex_shrink_0()
                                 .bg(p.card_hover)
@@ -1597,7 +2678,7 @@ impl Root {
                                 .gap(px(3.))
                                 .child(
                                     div()
-                                        .text_size(px(13.))
+                                        .text_size(px(15.))
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(if track.is_some() { p.ink } else { p.ash })
                                         .overflow_hidden()
@@ -1610,7 +2691,7 @@ impl Root {
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(11.))
+                                        .text_size(px(12.))
                                         .text_color(p.ash)
                                         .overflow_hidden()
                                         .text_ellipsis()
@@ -1618,7 +2699,7 @@ impl Root {
                                 ),
                         ),
                 )
-                // centre: transport + seek
+                // centre: time — transport — time, then a wide seek bar
                 .child(
                     div()
                         .flex_1()
@@ -1626,22 +2707,30 @@ impl Root {
                         .flex()
                         .flex_col()
                         .items_center()
-                        .gap(px(6.))
+                        .gap(px(7.))
                         .child(
                             div()
                                 .flex()
                                 .items_center()
-                                .gap(px(6.))
+                                .justify_center()
+                                .gap(px(22.))
+                                .child(
+                                    div()
+                                        .w(px(46.))
+                                        .text_size(px(12.))
+                                        .text_color(p.mute)
+                                        .child(fmt_duration(snap.position)),
+                                )
                                 .child(self.transport(
                                     "prev",
-                                    15.0,
-                                    p.mute,
+                                    20.0,
+                                    p.body,
                                     cx.listener(|this, _, _, _| this.audio.prev()),
                                 ))
                                 .child(
                                     div()
                                         .id("play")
-                                        .size(px(38.))
+                                        .size(px(48.))
                                         .rounded(px(999.))
                                         .bg(p.ink)
                                         .flex()
@@ -1651,33 +2740,47 @@ impl Root {
                                         .child(
                                             svg()
                                                 .path(asset(if playing { "pause" } else { "play" }))
-                                                .size(px(14.))
+                                                .size(px(18.))
                                                 .text_color(p.canvas),
                                         )
                                         .on_click(cx.listener(|this, _, _, _| this.audio.toggle())),
                                 )
                                 .child(self.transport(
                                     "next",
-                                    15.0,
-                                    p.mute,
+                                    20.0,
+                                    p.body,
                                     cx.listener(|this, _, _, _| this.audio.next()),
-                                )),
+                                ))
+                                .child(
+                                    div()
+                                        .w(px(46.))
+                                        .text_size(px(12.))
+                                        .text_color(p.mute)
+                                        .child(fmt_duration(snap.length)),
+                                ),
                         )
-                        .child(self.seek_bar(p, cx)),
+                        .child(
+                            div()
+                                .w_full()
+                                .max_w(px(560.))
+                                .child(self.seek_bar(p, cx)),
+                        ),
                 )
-                // right: volume and cast, kept quiet
+                // right: the quiet controls
                 .child(
                     div()
-                        .w(px(150.))
+                        .w(px(300.))
+                        .flex_shrink_0()
                         .flex()
                         .items_center()
                         .justify_end()
-                        .gap(px(4.))
+                        .gap(px(6.))
+                        .child(self.cast_button(cx))
                         .child(
                             div()
                                 .id("volume")
-                                .size(px(32.))
-                                .rounded(px(9.))
+                                .size(px(36.))
+                                .rounded(px(10.))
                                 .hover(|el| el.bg(p.card_hover))
                                 .flex()
                                 .items_center()
@@ -1685,11 +2788,11 @@ impl Root {
                                 .child(
                                     svg()
                                         .path(asset("volume"))
-                                        .size(px(15.))
+                                        .size(px(17.))
                                         .text_color(if snap.volume <= 0.001 {
                                             p.accent
                                         } else {
-                                            p.mute
+                                            p.icon
                                         }),
                                 )
                                 .on_click(cx.listener(|this, _, _, cx| this.toggle_mute(cx))),
@@ -1697,18 +2800,13 @@ impl Root {
                         .child(
                             div()
                                 .id("queue")
-                                .size(px(32.))
-                                .rounded(px(9.))
+                                .size(px(36.))
+                                .rounded(px(10.))
                                 .hover(|el| el.bg(p.card_hover))
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .child(
-                                    svg()
-                                        .path(asset("queue"))
-                                        .size(px(15.))
-                                        .text_color(p.mute),
-                                ),
+                                .child(svg().path(asset("queue")).size(px(17.)).text_color(p.icon)),
                         ),
                 ),
         )
@@ -1745,8 +2843,6 @@ impl Root {
         let bounds = Rc::new(Cell::new(Bounds::default()));
         let read = bounds.clone();
         let write = bounds.clone();
-        let elapsed = fmt_duration(snap.position);
-        let total = fmt_duration(snap.length);
 
         div()
             .flex_1()
@@ -1754,13 +2850,6 @@ impl Root {
             .flex()
             .items_center()
             .gap(px(10.))
-            .child(
-                div()
-                    .w(px(38.))
-                    .text_size(px(10.5))
-                    .text_color(p.ash)
-                    .child(elapsed),
-            )
             .child(
                 div()
                     .id("seek")
@@ -1837,13 +2926,6 @@ impl Root {
                         }),
                     ),
             )
-            .child(
-                div()
-                    .w(px(38.))
-                    .text_size(px(10.5))
-                    .text_color(p.ash)
-                    .child(total),
-            )
     }
 }
 
@@ -1859,6 +2941,31 @@ impl Render for Root {
             .font_family(FONT)
             .text_color(p.ink)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+                // A modal owns the keyboard: no typing may leak into search.
+                if this.modal.is_some() {
+                    match event.keystroke.key.as_str() {
+                        "escape" => this.modal = None,
+                        "enter" => this.submit_modal(cx),
+                        "backspace" => {
+                            if let Some(modal) = this.modal.as_mut() {
+                                modal.text.pop();
+                            }
+                        }
+                        _ => {
+                            if let Some(text) = event.keystroke.key_char.clone() {
+                                if !event.keystroke.modifiers.control
+                                    && !event.keystroke.modifiers.platform
+                                {
+                                    if let Some(modal) = this.modal.as_mut() {
+                                        modal.text.push_str(&text);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    cx.notify();
+                    return;
+                }
                 if this.tab != Tab::Search {
                     return;
                 }
@@ -1882,10 +2989,13 @@ impl Render for Root {
                             .flex_1()
                             .min_h_0()
                             .flex()
-                            .child(self.rail(cx))
-                            .child(self.content(cx)),
+                            .child(self.sidebar(cx))
+                            .child(self.content(cx))
+                            .when(self.wide, |el| el.child(self.now_panel())),
                     )
-                    .child(self.player_bar(cx)),
+                    .child(self.player_bar(cx))
+                    .child(self.cast_sheet(cx))
+                    .child(self.modal_view(cx)),
             )
     }
 }

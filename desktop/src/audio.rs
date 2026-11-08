@@ -34,6 +34,9 @@ pub struct Snapshot {
     pub queue_len: usize,
     pub index: usize,
     pub error: Option<String>,
+    /// The next few tracks, so a queue panel can be drawn without the UI
+    /// owning a second copy of the queue.
+    pub upcoming: Vec<Track>,
 }
 
 #[derive(Debug)]
@@ -45,6 +48,8 @@ enum Cmd {
     Prev,
     Seek(Duration),
     Volume(f32),
+    Crossfade(f32),
+    ReplayGain(bool),
     Append(Vec<Track>),
     Stop,
 }
@@ -112,6 +117,16 @@ impl Audio {
 
     pub fn set_volume(&self, v: f32) {
         let _ = self.tx.send(Cmd::Volume(v));
+    }
+
+    /// Seconds for a same-key blend. A clash is always shorter; the ratio lives
+    /// in `harmonic_factor`.
+    pub fn set_crossfade(&self, secs: f32) {
+        let _ = self.tx.send(Cmd::Crossfade(secs));
+    }
+
+    pub fn set_replay_gain(&self, on: bool) {
+        let _ = self.tx.send(Cmd::ReplayGain(on));
     }
 
     pub fn stop(&self) {
@@ -188,6 +203,9 @@ fn prefetch(cache: &Arc<Cache>, t: &Track) {
 
 struct Deck {
     player: Player,
+    /// Level matching from the stored EBU R128 loudness, so a quiet master and a
+    /// loud one arrive at the same perceived volume.
+    gain: f32,
 }
 
 impl Deck {
@@ -251,6 +269,8 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
     let mut volume = 0.85f32;
     let mut blend: Option<f32> = None;
     let mut fade = Duration::from_secs(8);
+    let mut base_fade = 8.0f32;
+    let mut replay_gain = true;
     let mut loading = false;
     let mut error: Option<String> = None;
     let session = std::time::SystemTime::now()
@@ -268,7 +288,7 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
         }
     };
 
-    let load = |track: &Track, from: Duration| -> anyhow::Result<Deck> {
+    let load = |track: &Track, from: Duration, replay_gain: bool| -> anyhow::Result<Deck> {
         let path = cache.ensure(track)?;
         let source = crate::track_source::open(&path, track.duration())?;
         let player = Player::connect_new(mixer);
@@ -277,7 +297,20 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
         if from > Duration::ZERO {
             let _ = player.try_seek(from);
         }
-        Ok(Deck { player })
+        // Level match to -14 LUFS: ±6 dB of boost, -12 dB of cut, and nothing
+        // for tracks whose features were never measured.
+        let gain = if replay_gain {
+            track
+                .loudness
+                .map(|l| {
+                    let db = (-14.0 - l).clamp(-12.0, 6.0);
+                    10f32.powf((db / 20.0) as f32)
+                })
+                .unwrap_or(1.0)
+        } else {
+            1.0
+        };
+        Ok(Deck { player, gain })
     };
 
     loop {
@@ -296,7 +329,7 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
                     if let Some(track) = queue.get(index).cloned() {
                         loading = true;
                         error = None;
-                        match load(&track, Duration::ZERO) {
+                        match load(&track, Duration::ZERO, replay_gain) {
                             Ok(deck) => decks[active] = Some(deck),
                             Err(e) => error = Some(e.to_string()),
                         }
@@ -314,7 +347,7 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
                         playing = true;
                         cursor = Cursor::Idle;
                         if let Some(track) = queue.first().cloned() {
-                            if let Ok(deck) = load(&track, Duration::ZERO) {
+                            if let Ok(deck) = load(&track, Duration::ZERO, replay_gain) {
                                 decks[active] = Some(deck);
                             }
                         }
@@ -325,7 +358,7 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
                         // The last track finished and took its deck with it; the
                         // play button must start it again rather than do nothing.
                         if let Some(track) = queue.get(index).cloned()
-                            && let Ok(deck) = load(&track, Duration::ZERO)
+                            && let Ok(deck) = load(&track, Duration::ZERO, replay_gain)
                         {
                             decks[active] = Some(deck);
                             playing = true;
@@ -345,7 +378,7 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
                 Cmd::SetPlaying(on) => {
                     if decks[active].is_none() && on {
                         if let Some(track) = queue.get(index).cloned()
-                            && let Ok(deck) = load(&track, Duration::ZERO)
+                            && let Ok(deck) = load(&track, Duration::ZERO, replay_gain)
                         {
                             decks[active] = Some(deck);
                             cursor = Cursor::Idle;
@@ -374,7 +407,7 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
                         cursor = Cursor::Idle;
                         stop_both(&mut decks);
                         if let Some(track) = queue.get(index).cloned() {
-                            if let Ok(deck) = load(&track, Duration::ZERO) {
+                            if let Ok(deck) = load(&track, Duration::ZERO, replay_gain) {
                                 if !playing {
                                     deck.player.pause();
                                 }
@@ -389,7 +422,7 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
                     cursor = Cursor::Idle;
                     stop_both(&mut decks);
                     if let Some(track) = queue.get(index).cloned() {
-                        if let Ok(deck) = load(&track, Duration::ZERO) {
+                        if let Ok(deck) = load(&track, Duration::ZERO, replay_gain) {
                             if !playing {
                                 deck.player.pause();
                             }
@@ -403,6 +436,8 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
                     }
                 }
                 Cmd::Volume(v) => volume = v.clamp(0.0, 1.0),
+                Cmd::Crossfade(secs) => base_fade = secs.clamp(0.0, 20.0),
+                Cmd::ReplayGain(on) => replay_gain = on,
                 Cmd::Stop => {
                     stop_both(&mut decks);
                     playing = false;
@@ -434,13 +469,13 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
             let (Some(t), Some(next)) = (current.as_ref(), queue.get(index + 1).cloned()) else {
                 unreachable!()
             };
-            fade = Duration::from_secs_f32(8.0 * harmonic_factor(
+            fade = Duration::from_secs_f32(base_fade * harmonic_factor(
                 t.camelot.as_deref(),
                 next.camelot.as_deref(),
             ));
             let other = 1 - active;
             prefetch(&cache, &next);
-            if let Ok(deck) = load(&next, Duration::ZERO) {
+            if let Ok(deck) = load(&next, Duration::ZERO, replay_gain) {
                 if let Some(old) = decks[other].take() {
                     old.player.stop();
                 }
@@ -458,10 +493,10 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
             blend = Some(p);
             let angle = p * std::f32::consts::FRAC_PI_2;
             if let Some(a) = decks[active].as_ref() {
-                a.player.set_volume(volume * angle.cos());
+                a.player.set_volume(volume * a.gain * angle.cos());
             }
             if let Some(b) = decks[other].as_ref() {
-                b.player.set_volume(volume * angle.sin());
+                b.player.set_volume(volume * b.gain * angle.sin());
             }
             if p >= 1.0 {
                 if let Some(t) = current.as_ref() {
@@ -489,7 +524,7 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
                 index += 1;
                 cursor = Cursor::Idle;
                 if let Some(track) = queue.get(index).cloned() {
-                    if let Ok(deck) = load(&track, Duration::ZERO) {
+                    if let Ok(deck) = load(&track, Duration::ZERO, replay_gain) {
                         decks[active] = Some(deck);
                     }
                 }
@@ -499,7 +534,7 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
             }
         } else if blend.is_none() {
             if let Some(deck) = decks[active].as_ref() {
-                deck.player.set_volume(volume);
+                deck.player.set_volume(volume * deck.gain);
             }
         }
 
@@ -526,6 +561,12 @@ fn run(rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>, api: Api, cache: Cache) ->
             s.queue_len = queue.len();
             s.index = index;
             s.error = error.clone();
+            s.upcoming = queue
+                .iter()
+                .skip(index + 1)
+                .take(12)
+                .cloned()
+                .collect();
         }
 
         std::thread::sleep(Duration::from_millis(20));
